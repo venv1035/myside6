@@ -112,14 +112,17 @@ def _sort_icon(up_active: bool = False, down_active: bool = False) -> QIcon:
 
 class _MultiColumnFilterProxy(QSortFilterProxyModel):
     """Proxy model that filters multiple columns by a set of allowed values
-    or by a numeric comparison (>, <, =, >=, <=, !=)."""
+    or by one or more numeric comparisons (>, <, =, >=, <=, !=) combined with
+    logical AND — e.g. ``[(">", 200), ("<", 300)]`` keeps rows whose cell is
+    in the open interval (200, 300)."""
 
     NUMERIC_OPS: tuple[str, ...] = ("=", "!=", ">", ">=", "<", "<=")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._allowed: dict[int, set[str]] = {}
-        self._numeric: dict[int, tuple[str, float]] = {}
+        # column -> list of (op, value) combined with AND
+        self._numeric: dict[int, list[tuple[str, float]]] = {}
 
     # ---- text filters ----------------------------------------------------
     def set_column_filter(self, column: int, allowed_values: set[str] | None) -> None:
@@ -133,18 +136,43 @@ class _MultiColumnFilterProxy(QSortFilterProxyModel):
         return self._allowed.get(column)
 
     # ---- numeric filters -------------------------------------------------
-    def set_column_numeric_filter(self, column: int, op: str, value: float) -> None:
+    def set_column_numeric_filter(self, column: int,
+                                  conditions: Sequence[tuple[str, float]] | None) -> None:
+        """Replace the numeric filter for *column* with the given conditions.
+
+        Pass ``None`` or an empty list to clear. Each condition is
+        ``(op, value)``; all conditions are combined with logical AND.
+        """
+        if conditions is None:
+            self._numeric.pop(column, None)
+        else:
+            cleaned: list[tuple[str, float]] = []
+            for op, value in conditions:
+                if op not in self.NUMERIC_OPS:
+                    raise ValueError(
+                        f"unsupported op {op!r}; expected one of {self.NUMERIC_OPS}"
+                    )
+                cleaned.append((op, float(value)))
+            if cleaned:
+                self._numeric[column] = cleaned
+            else:
+                self._numeric.pop(column, None)
+        self.invalidateFilter()
+
+    def add_numeric_condition(self, column: int, op: str, value: float) -> None:
         if op not in self.NUMERIC_OPS:
             raise ValueError(f"unsupported op {op!r}; expected one of {self.NUMERIC_OPS}")
-        self._numeric[column] = (op, float(value))
+        self._numeric.setdefault(column, []).append((op, float(value)))
         self.invalidateFilter()
 
     def clear_column_numeric_filter(self, column: int) -> None:
         if self._numeric.pop(column, None) is not None:
             self.invalidateFilter()
 
-    def column_numeric_filter(self, column: int) -> tuple[str, float] | None:
-        return self._numeric.get(column)
+    def column_numeric_filter(self, column: int) -> list[tuple[str, float]] | None:
+        """Return a copy of the numeric conditions for *column*, or ``None``."""
+        lst = self._numeric.get(column)
+        return list(lst) if lst is not None else None
 
     # ---- shared ----------------------------------------------------------
     def active_filter_columns(self) -> set[int]:
@@ -164,15 +192,16 @@ class _MultiColumnFilterProxy(QSortFilterProxyModel):
             text = "" if not idx.isValid() else str(idx.data(Qt.DisplayRole) or "")
             if text not in allowed:
                 return False
-        for column, (op, value) in self._numeric.items():
+        for column, conditions in self._numeric.items():
             idx = model.index(source_row, column, source_parent)
             raw = "" if not idx.isValid() else idx.data(Qt.DisplayRole)
             try:
                 cell = float(raw)
             except (TypeError, ValueError):
                 return False
-            if not self._compare(cell, op, value):
-                return False
+            for op, value in conditions:
+                if not self._compare(cell, op, value):
+                    return False   # any failing condition excludes the row
         return True
 
     @staticmethod
@@ -202,12 +231,59 @@ class _CheckListWidget(QListWidget):
         super().mousePressEvent(event)
 
 
+class _NumericConditionRow(QWidget):
+    """A single row in the numeric filter popup: ``[op] [value] [×]``.
+
+    Emits :attr:`removeRequested` when the user clicks the small × button.
+    """
+
+    removeRequested = Signal(object)   # emits self
+
+    def __init__(self, op: str = "=", value: float = 0.0,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._op = QComboBox(self)
+        for label, data in [("等于 =", "="), ("不等于 ≠", "!="),
+                            ("大于 >", ">"), ("大于等于 ≥", ">="),
+                            ("小于 <", "<"), ("小于等于 ≤", "<=")]:
+            self._op.addItem(label, data)
+        idx = self._op.findData(op)
+        if idx >= 0:
+            self._op.setCurrentIndex(idx)
+
+        self._value = QDoubleSpinBox(self)
+        self._value.setRange(-1e15, 1e15)
+        self._value.setDecimals(2)
+        self._value.setSingleStep(1.0)
+        self._value.setMinimumWidth(120)
+        self._value.setValue(value)
+
+        self._remove = QToolButton(self)
+        self._remove.setText("×")
+        self._remove.setToolTip("删除该条件")
+        self._remove.setFixedSize(24, 24)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self._op)
+        layout.addWidget(self._value, 1)
+        layout.addWidget(self._remove)
+        self._remove.clicked.connect(lambda: self.removeRequested.emit(self))
+
+    def condition(self) -> tuple[str, float]:
+        return (self._op.currentData(), self._value.value())
+
+
 class _FilterPopup(QFrame):
     """Excel-style column filter popup with search + checkable values
-    or numeric comparison (>, <, =, >=, <=, !=).
+    or numeric comparison (one or more AND-combined conditions).
+
+    Numeric mode lets the user add multiple ``(op, value)`` conditions —
+    e.g. ``(> 200)`` AND ``(< 300)`` — and remove them individually.
 
     Implemented as a :class:`QFrame` with the ``Qt.Popup`` window flag rather
-    than as a :class:`QMenu`, because ``QMenu`` interferes with IME composition
+    than as a :class:`QMenu`, because ``QMenu` interferes with IME composition
     (typing Chinese / Japanese / Korean inside the search box did not work).
 
     Default semantics: when no prior filter exists, the popup opens with all
@@ -217,14 +293,14 @@ class _FilterPopup(QFrame):
     """
 
     filterChanged = Signal(int, object)            # column, set or None
-    numericFilterChanged = Signal(int, str, float)  # column, op, value
+    numericFilterChanged = Signal(int, object)     # column, list[(op, value)] or None
     sortRequested = Signal(int, Qt.SortOrder)
 
     def __init__(self, column: int, values: Iterable[str],
                  selected: set[str] | None,
                  *,
                  numeric: bool = False,
-                 numeric_filter: tuple[str, float] | None = None,
+                 numeric_filter: Sequence[tuple[str, float]] | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.Popup)
         self.setFrameShape(QFrame.NoFrame)
@@ -244,7 +320,7 @@ class _FilterPopup(QFrame):
             self._selected = set(selected)
         # Numeric-mode state.
         self._numeric_mode = numeric
-        self._numeric_initial: tuple[str, float] | None = numeric_filter
+        self._condition_rows: list[_NumericConditionRow] = []
 
         self.setStyleSheet(
             """
@@ -282,6 +358,13 @@ class _FilterPopup(QFrame):
             }
             QPushButton#primary:hover { background: #1765cc; }
             QCheckBox { padding: 2px; }
+            QToolButton {
+                border: 1px solid #dadce0;
+                border-radius: 4px;
+                background: #ffffff;
+                padding: 0;
+            }
+            QToolButton:hover { background: #fce8e6; color: #c5221f; }
             """
         )
 
@@ -299,9 +382,31 @@ class _FilterPopup(QFrame):
 
         # Numeric-mode toggle (only when column is registered as numeric).
         self._numeric_toggle: QCheckBox | None = None
+        self._numeric_container: QWidget | None = None
+        self._numeric_layout: QVBoxLayout | None = None
         if numeric:
             self._numeric_toggle = QCheckBox("按数字比较", self)
             v.addWidget(self._numeric_toggle)
+
+            self._numeric_container = QWidget(self)
+            self._numeric_layout = QVBoxLayout(self._numeric_container)
+            self._numeric_layout.setContentsMargins(0, 0, 0, 0)
+            self._numeric_layout.setSpacing(4)
+            v.addWidget(self._numeric_container)
+
+            # Seed with prior conditions, or a single default row.
+            if numeric_filter:
+                for op, val in numeric_filter:
+                    self._add_condition_row(op, val)
+                self._numeric_toggle.setChecked(True)
+            else:
+                self._add_condition_row("=", 0.0)
+
+            self._add_btn = QPushButton("+ 添加条件", self._numeric_container)
+            self._add_btn.setToolTip("再增加一个比较条件(AND 关系)")
+            self._numeric_layout.addWidget(self._add_btn)
+            self._add_btn.clicked.connect(lambda: (self._add_condition_row("=", 0.0),
+                                                   self._sync_remove_buttons()))
 
         # Text-mode widgets: search box + (全选) + list.
         self._search = QLineEdit(self)
@@ -319,39 +424,6 @@ class _FilterPopup(QFrame):
         self._list.setMaximumHeight(280)
         self._list.setMinimumWidth(220)
         v.addWidget(self._list)
-
-        # Numeric-mode widgets: operator combo + value spinbox.
-        self._numeric_row: QWidget | None = None
-        if numeric:
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            self._numeric_op = QComboBox(self)
-            for label, op in [("等于 =", "="), ("不等于 ≠", "!="),
-                              ("大于 >", ">"), ("大于等于 ≥", ">="),
-                              ("小于 <", "<"), ("小于等于 ≤", "<=")]:
-                self._numeric_op.addItem(label, op)
-            self._numeric_value = QDoubleSpinBox(self)
-            self._numeric_value.setRange(-1e15, 1e15)
-            self._numeric_value.setDecimals(2)
-            self._numeric_value.setSingleStep(1.0)
-            self._numeric_value.setMinimumWidth(140)
-            # 默认值
-            if numeric_filter is not None:
-                op, value = numeric_filter
-                idx = self._numeric_op.findData(op)
-                if idx >= 0:
-                    self._numeric_op.setCurrentIndex(idx)
-                self._numeric_value.setValue(value)
-                self._numeric_toggle.setChecked(True)
-            else:
-                self._numeric_op.setCurrentIndex(0)
-                self._numeric_value.setValue(0.0)
-            row.addWidget(self._numeric_op)
-            row.addWidget(self._numeric_value, 1)
-            self._numeric_row = QWidget(self)
-            self._numeric_row.setLayout(row)
-            self._numeric_row.setVisible(False)
-            v.addWidget(self._numeric_row)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
@@ -377,6 +449,38 @@ class _FilterPopup(QFrame):
         if self._numeric_toggle is not None:
             self._numeric_toggle.toggled.connect(self._on_numeric_toggled)
             self._apply_numeric_visibility()
+            self._sync_remove_buttons()
+
+    # ---- numeric rows ----------------------------------------------------
+    def _add_condition_row(self, op: str, value: float) -> _NumericConditionRow:
+        assert self._numeric_layout is not None
+        row = _NumericConditionRow(op, value, self._numeric_container)
+        row.removeRequested.connect(self._on_remove_row)
+        # insert *before* the "+ 添加条件" button (which is the last item)
+        self._numeric_layout.insertWidget(self._numeric_layout.count() - 1, row)
+        self._condition_rows.append(row)
+        return row
+
+    def _on_remove_row(self, row: _NumericConditionRow) -> None:
+        if len(self._condition_rows) <= 1:
+            # Never leave the popup with zero rows; the last row is reset instead.
+            row._op.setCurrentIndex(0)
+            row._value.setValue(0.0)
+            return
+        self._condition_rows.remove(row)
+        self._numeric_layout.removeWidget(row)
+        row.setParent(None)
+        row.deleteLater()
+        self._sync_remove_buttons()
+
+    def _sync_remove_buttons(self) -> None:
+        # Disable the × button when there's only one row left so the user
+        # always has at least one condition to fill in.
+        for r in self._condition_rows:
+            r._remove.setEnabled(len(self._condition_rows) > 1)
+
+    def _collect_conditions(self) -> list[tuple[str, float]]:
+        return [r.condition() for r in self._condition_rows]
 
     # ---- numeric toggle --------------------------------------------------
     def _on_numeric_toggled(self, checked: bool) -> None:
@@ -388,8 +492,8 @@ class _FilterPopup(QFrame):
         numeric_on = self._numeric_toggle.isChecked()
         for w in (self._search, self._select_all, self._list):
             (w.show if not numeric_on else w.hide)()
-        if self._numeric_row is not None:
-            (self._numeric_row.show if numeric_on else self._numeric_row.hide)()
+        if self._numeric_container is not None:
+            (self._numeric_container.show if numeric_on else self._numeric_container.hide)()
         # 触发 layout 重算
         self.layout().invalidate()
 
@@ -468,14 +572,13 @@ class _FilterPopup(QFrame):
         if self._numeric_toggle is not None:
             self._numeric_toggle.setChecked(False)
         self.filterChanged.emit(self._column, None)
-        self.numericFilterChanged.emit(self._column, "", 0.0)
+        self.numericFilterChanged.emit(self._column, None)
         self.close()
 
     def _on_ok(self) -> None:
         if self._numeric_toggle is not None and self._numeric_toggle.isChecked():
-            op = self._numeric_op.currentData()
-            value = self._numeric_value.value()
-            self.numericFilterChanged.emit(self._column, op, value)
+            conditions = self._collect_conditions()
+            self.numericFilterChanged.emit(self._column, conditions)
             # 同时清理文本 filter
             self.filterChanged.emit(self._column, None)
         else:
@@ -486,7 +589,7 @@ class _FilterPopup(QFrame):
             else:
                 self.filterChanged.emit(self._column, set(self._selected))
             # 清理 numeric filter (回到纯文本模式)
-            self.numericFilterChanged.emit(self._column, "", 0.0)
+            self.numericFilterChanged.emit(self._column, None)
         self.close()
 
     def show_at(self, global_pos: QPoint) -> None:
@@ -503,9 +606,10 @@ class _FilterPopup(QFrame):
             y = max(rect.top(), global_pos.y() - size.height())
         self.move(x, y)
         self.show()
-        if self._numeric_toggle is not None and self._numeric_toggle.isChecked():
-            self._numeric_value.setFocus()
-            self._numeric_value.selectAll()
+        if self._numeric_toggle is not None and self._numeric_toggle.isChecked() \
+                and self._condition_rows:
+            self._condition_rows[0]._value.setFocus()
+            self._condition_rows[0]._value.selectAll()
         else:
             self._search.setFocus()
 
@@ -831,7 +935,11 @@ class MyTable(QTableView):
             self._proxy.clear_column_numeric_filter(int(column))
             self._header.set_active(int(column), False)
 
-    def column_numeric_filter(self, column: int) -> tuple[str, float] | None:
+    def column_numeric_filter(self, column: int) -> list[tuple[str, float]] | None:
+        """Return the AND-combined numeric conditions for *column*, or
+        ``None`` if the column has no numeric filter. Example:
+        ``[(">", 200), ("<", 300)]`` keeps rows in the open interval.
+        """
         return self._proxy.column_numeric_filter(column)
 
     def _show_filter_menu(self, column: int, global_pos: QPoint) -> None:
@@ -865,14 +973,12 @@ class MyTable(QTableView):
         has_num = self._proxy.column_numeric_filter(column) is not None
         self._header.set_active(column, has_text or has_num)
 
-    def _on_numeric_filter_changed(self, column: int, op: str, value: float) -> None:
-        if not op:
-            # Clear signal (emitted on OK in text mode or on "清除筛选")
-            self._proxy.clear_column_numeric_filter(column)
-        else:
-            self._proxy.set_column_numeric_filter(column, op, value)
+    def _on_numeric_filter_changed(self, column: int,
+                                    conditions: list[tuple[str, float]] | None) -> None:
+        # ``conditions`` is None to clear, otherwise a list of (op, value) AND'd.
+        self._proxy.set_column_numeric_filter(column, conditions)
         has_text = self._proxy.column_filter(column) is not None
-        has_num = op != ""
+        has_num = bool(conditions)
         self._header.set_active(column, has_text or has_num)
 
     def _on_sort_requested(self, column: int, order: Qt.SortOrder) -> None:

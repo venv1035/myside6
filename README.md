@@ -72,7 +72,7 @@ table.show()
 sys.exit(app.exec())
 ```
 
-数字列的弹窗会多一个"按数字比较"开关：勾上后列表/搜索框隐藏，出现"运算符 + 数字"输入框，支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种比较。
+数字列的弹窗会多一个"按数字比较"开关：勾上后列表/搜索框隐藏，出现**多个条件行**。每行 = `运算符 + 数字 + ×`，可以点"+ 添加条件"加行；所有条件用 AND 组合（要"工资在 (20000, 25000) 范围"就直接 `(>, 20000)` + `(<, 25000)`）。运算符支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种。
 
 ### 2.2 API 参考
 
@@ -119,11 +119,16 @@ sys.exit(app.exec())
 | `clear_filters()` | 清除所有列的筛选（文本 + 数字），重置漏斗图标 |
 | `set_filter_skipped_columns(columns)` | 批量禁用指定列的筛选入口（漏斗图标不画、点击无响应）—— 给"操作"列这种纯 UI 列用 |
 | `set_column_numeric(column, enabled=True)` | 把某列标记为**数字列**，弹窗顶部出现"按数字比较"开关 |
-| `column_numeric_filter(column) -> tuple[str, float] \| None` | 读取某列当前的数字比较 filter；`None` 表示没启用 |
+| `column_numeric_filter(column) -> list[tuple[str, float]] \| None` | 读取某列当前的数字比较 filter；`None` 表示没启用；`[(">", 20000), ("<", 25000)]` 表示 2 个条件 AND |
 
 **默认行为**：弹窗打开时所有可见项**视觉上全勾选**（看起来"全选"），但语义上是"不过滤"——只有当用户**取消勾选**某项后，"确定"才真正下发 filter。这样默认开/关筛选不会误伤行数。
 
-**数字比较**：勾上"按数字比较"开关 → 列表/搜索框隐藏，出现"运算符 + 数字"输入框；运算符支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种。proxy 内部用 `float(cell) op value` 比较，无法转成 float 的行会被**过滤掉**（而不是通过）。
+**数字比较**：勾上"按数字比较"开关 → 列表/搜索框隐藏，出现**条件列表**。每行 `运算符 + 数字 + ×`；点"+ 添加条件"追加行（至少保留 1 行）。所有条件用 **AND** 组合，常见用法：
+- 范围筛选：`工资 > 20000 AND < 25000`
+- 闭区间：`年龄 >= 18 AND <= 35`
+- 排除特定值：`工资 > 0 AND != 25000`
+
+运算符支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种。proxy 内部用 `float(cell) op value` 比较，无法转成 float 的行会被**过滤掉**（而不是通过）。
 
 #### 信号
 
@@ -447,6 +452,18 @@ if not active and not hover:
 - `_FilterPopup` 加"按数字比较" `QCheckBox` —— 勾上后列表/搜索框 `hide()`，显示"运算符 `QComboBox` + 数字 `QDoubleSpinBox`"
 - `_MultiColumnFilterProxy` 加 `set_column_numeric_filter(column, op, value)` —— 6 个 op：=, !=, >, >=, <, <=；非 float 行被过滤掉
 - 文本 filter 和数字 filter 同一列互斥 —— 选数字模式时自动清掉文本 filter，反之亦然
+
+### 5.11 数字列需要"多条件 AND"范围筛选
+
+**现象**：单 op+value 满足不了"工资 > 20000 且 < 25000"这种范围筛选；用户只能要么 `> 20000`（把 25500 也带进来），要么 `< 25000`（把 13500 也带进来），或者放弃数字 filter 改回多选枚举。
+
+**修复**：
+- 数据：`proxy.set_column_numeric_filter(column, conditions)` 接受 `list[tuple[str, float]]`；多个条件按 **AND** 组合
+- UI：抽出 `_NumericConditionRow` 内部类，封装 `QComboBox + QDoubleSpinBox + QToolButton(×)`
+- popup 用动态 `QVBoxLayout` 装多个 row + 一个"+ 添加条件"按钮；至少保留 1 行（删到 1 行时不删而是 reset 为默认值）
+- 打开 popup 时从 `numeric_filter` 恢复所有行；初始空则放 1 个 `("=", 0.0)` 默认行
+- 信号 `numericFilterChanged` 从 `(column, op, value)` 改成 `(column, list|None)`，传 `None` 表示清空
+- `MyTable.column_numeric_filter` 返回 `list | None`（之前是单 tuple — 内部 API breaking，但项目里没消费者）
 
 ---
 
