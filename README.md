@@ -465,6 +465,31 @@ if not active and not hover:
 - 信号 `numericFilterChanged` 从 `(column, op, value)` 改成 `(column, list|None)`，传 `None` 表示清空
 - `MyTable.column_numeric_filter` 返回 `list | None`（之前是单 tuple — 内部 API breaking，但项目里没消费者）
 
+### 5.12 表头上下箭头跟漏斗重叠 / 出现两列上下箭头
+
+**现象**：表头里**同一列**上能看到 2 个上下箭头 —— 一个是 Qt 默认的 sort indicator，另一个是我们 `_FilterHeaderView.paintSection` 自绘的双箭头；两个叠加在一起。同时排序列的 sort indicator 又跟 hover 列的漏斗离得很近，看着像重叠。
+
+**根因**：
+- `_FilterHeaderView.__init__` 调了 `self.setSortIndicatorShown(False)` 关掉 Qt 默认 sort indicator
+- 但 `QTableView.setHorizontalHeader(header)` 和 `QTableView.setSortingEnabled(True)` **会重置**该 flag 回 `True`
+- 之后 `super().paintSection(...)` 仍然画原生 sort indicator，**叠加**在我们自绘双箭头上 = 视觉上"两列上下箭头"
+
+**修复**：在 `MyTable.__init__` 末尾，**所有** `setHorizontalHeader / setSortingEnabled / setSelectionBehavior / setEditTriggers / ...` 都完成**之后**，再调一次 `self._header.setSortIndicatorShown(False)`，确保最终状态正确。
+
+```python
+self.setSortingEnabled(True)
+self.setAlternatingRowColors(True)
+self.setSelectionBehavior(QAbstractItemView.SelectRows)
+...
+# 关键: 必须在 setHorizontalHeader / setSortingEnabled 之后再次关闭
+self._header.setSortIndicatorShown(False)
+```
+
+视觉验证（`_FilterHeaderView` 的 paintSection 仍保留）：
+- 排序列：1 个自绘双箭头（升序上蓝下灰，降序上灰下蓝）
+- hover 列：1 个灰色双箭头 + 灰色漏斗，6 px 间距不重叠
+- skip 列：排序箭头贴右边缘，无漏斗
+
 ---
 
 ## 附：开发与测试

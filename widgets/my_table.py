@@ -806,6 +806,12 @@ class MyTable(QTableView):
         self.verticalHeader().setDefaultSectionSize(30)
         self.setMouseTracking(True)
 
+        # ``QTableView.setHorizontalHeader`` (and ``setSortingEnabled``) reset
+        # the header's sort-indicator-shown flag back to True, so the call
+        # we make in ``_FilterHeaderView.__init__`` is not enough. Re-disable
+        # after the table is fully wired up — we draw our own arrow icon.
+        self._header.setSortIndicatorShown(False)
+
         self._checkable_rows = False
         self._check_column = 0
         self._editable_columns: set[int] | None = None  # None = none, set = whitelist
