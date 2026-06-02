@@ -782,8 +782,7 @@ class MyTable(QTableView):
             flags = Qt.ItemIsSelectable | Qt.ItemIsEnabled
             if self._checkable_rows and c == self._check_column:
                 flags |= Qt.ItemIsUserCheckable
-                if item.checkState() not in (Qt.Checked, Qt.Unchecked):
-                    item.setCheckState(Qt.Unchecked)
+                item.setCheckState(item.checkState())  # 同步 CheckStateRole data
                 item.setData("", Qt.DisplayRole)
             elif self._column_is_editable(c):
                 flags |= Qt.ItemIsEditable
