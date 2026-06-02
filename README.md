@@ -56,19 +56,23 @@ from widgets import MyTable
 
 app = QApplication(sys.argv)
 
-table = MyTable()
+table = MyTable(skip_filter_columns=[4])  # 禁用第 4 列（操作列）的筛选入口
 table.set_data(
-    ["ID", "姓名", "部门", "城市"],
+    ["ID", "姓名", "部门", "城市", "操作"],
     [
-        [1, "张伟", "研发部", "北京"],
-        [2, "王芳", "市场部", "上海"],
-        [3, "李娜", "财务部", "广州"],
+        [1, "张伟", "研发部", "北京", ""],
+        [2, "王芳", "市场部", "上海", ""],
+        [3, "李娜", "财务部", "广州", ""],
     ],
 )
+table.set_column_numeric(2, enabled=True)   # "部门" 列按数字比较(可选)
+table.set_column_numeric(3, enabled=True)   # "城市" 列按数字比较
 table.resize(700, 400)
 table.show()
 sys.exit(app.exec())
 ```
+
+数字列的弹窗会多一个"按数字比较"开关：勾上后列表/搜索框隐藏，出现"运算符 + 数字"输入框，支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种比较。
 
 ### 2.2 API 参考
 
@@ -112,7 +116,14 @@ sys.exit(app.exec())
 
 | 方法 | 说明 |
 |---|---|
-| `clear_filters()` | 清除所有列的筛选，重置漏斗图标 |
+| `clear_filters()` | 清除所有列的筛选（文本 + 数字），重置漏斗图标 |
+| `set_filter_skipped_columns(columns)` | 批量禁用指定列的筛选入口（漏斗图标不画、点击无响应）—— 给"操作"列这种纯 UI 列用 |
+| `set_column_numeric(column, enabled=True)` | 把某列标记为**数字列**，弹窗顶部出现"按数字比较"开关 |
+| `column_numeric_filter(column) -> tuple[str, float] \| None` | 读取某列当前的数字比较 filter；`None` 表示没启用 |
+
+**默认行为**：弹窗打开时所有可见项**视觉上全勾选**（看起来"全选"），但语义上是"不过滤"——只有当用户**取消勾选**某项后，"确定"才真正下发 filter。这样默认开/关筛选不会误伤行数。
+
+**数字比较**：勾上"按数字比较"开关 → 列表/搜索框隐藏，出现"运算符 + 数字"输入框；运算符支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种。proxy 内部用 `float(cell) op value` 比较，无法转成 float 的行会被**过滤掉**（而不是通过）。
 
 #### 信号
 
@@ -197,8 +208,9 @@ table.setColumnWidth(action_column, 90)
 - **漏斗**：
   - 默认隐藏，鼠标 hover 表头才显示灰色描边漏斗
   - 列已启用筛选：始终显示**蓝色实心漏斗 + 右上角红点**
+  - **被 `set_filter_skipped_columns` 禁用的列**：漏斗永远不画，鼠标 hover 也不响应——适合"操作"列（内联按钮）、"选择"列（带 checkbox）等纯 UI 列
 
-两者位置固定不重叠（排序在漏斗左侧，间隔 6 px）。
+两者位置固定不重叠（排序在漏斗左侧，间隔 6 px）。如果列被 `set_filter_skipped_columns` 禁用，排序双箭头会贴右边缘显示。
 
 ### 2.5 注意事项
 
@@ -207,6 +219,9 @@ table.setColumnWidth(action_column, 90)
 3. **`set_data` 会替换整个模型**，并会断开旧模型的 `itemChanged` 信号；如需保留数据请改用 `setModel(your_model)`。
 4. **行内按钮的事件区域**：`ActionDelegate.editorEvent` 只在 `option.rect.contains(...)` 范围内捕获点击，按钮覆盖整个单元格；若想让按钮更小，请把列宽调小。
 5. **拖动列顺序后**，`columnCount()` 与列号 API 仍按逻辑顺序工作（与 Qt 的 `QHeaderView.swapSections` 一致）。
+6. **数字列筛选**：`set_column_numeric` 只影响**弹窗 UI**（是否显示"按数字比较"开关），不影响数据模型。proxy 内部按 `float(cell_data)` 比较；**无法转 float 的行会被过滤掉**（比如空串、非数字字符串），跟"等于"行为一致。
+7. **筛选默认"全勾选 = 不过滤"**：弹窗打开时所有项视觉全勾，但 `_on_ok` 只在用户主动**取消**过某项后才下发 `set[str]` filter。直接点"确定"会 emit `None` = 不过滤。
+8. **文本 filter 与数字 filter 在同一列上互斥**：勾上"按数字比较"并确定后，自动清掉该列的文本 filter（反之亦然）。
 
 ---
 
@@ -413,6 +428,25 @@ if not active and not hover:
 **现象**：用户分不清主输入框在哪、是否聚焦。
 
 **修复**：给 `QLineEdit` 加 2 px 底部边框：默认浅灰、聚焦变蓝；同时保留外层圆角边框聚焦时变蓝，形成双重焦点提示。两种状态都用 2 px（不变），避免聚焦时文字位置抖动 1 px。
+
+### 5.9 筛选默认"全勾选"应该是"不过滤"
+
+**现象**：弹窗打开默认所有项已勾选，用户点"确定"后行数没变化——符合直觉。但早期实现里点"确定"会下发 `set(self._all_values)`（语义上"全选"），proxy 收到后做精确包含判断：行不匹配会被过滤掉——结果意外隐藏了部分行。
+
+**根因**：把"全勾选"理解为"我要选中这一列的所有值"，但漏斗筛选的语义里"包含所有值"= "不过滤"；两者混淆导致把"全选"和"严格全集"绑定了。
+
+**修复**：引入 `_unfiltered: bool` 状态。弹窗打开时 `_unfiltered=True` 且 list 视觉全勾；用户改 checkbox → `_unfiltered=False`；点"确定"时按 `_unfiltered` 决定 emit `None` (不过滤) 还是 `set(self._selected)`。
+
+### 5.10 数字列需要"按数字比较"开关
+
+**现象**：工资 / 年龄这种数字列，列表里有 30, 35, 41... 多选时只能 `set = {30, 35}` 这种枚举式筛选，要找"年龄 > 30 的所有员工"做不了。
+
+**修复**：
+- `MyTable.set_column_numeric(column, enabled=True)` 标记列
+- `MyTable.__init__(skip_filter_columns=[...])` 在构造时禁用不需要筛选的列
+- `_FilterPopup` 加"按数字比较" `QCheckBox` —— 勾上后列表/搜索框 `hide()`，显示"运算符 `QComboBox` + 数字 `QDoubleSpinBox`"
+- `_MultiColumnFilterProxy` 加 `set_column_numeric_filter(column, op, value)` —— 6 个 op：=, !=, >, >=, <, <=；非 float 行被过滤掉
+- 文本 filter 和数字 filter 同一列互斥 —— 选数字模式时自动清掉文本 filter，反之亦然
 
 ---
 

@@ -37,6 +37,8 @@ SAMPLE_ROWS = [
 ]
 CHECK_COL = 0
 ACTION_COL = 7
+AGE_COL = 5
+SAL_COL = 6
 EDITABLE_COLS = [2, 3, 4, 5, 6]
 
 
@@ -110,20 +112,24 @@ class DemoWindow(QMainWindow):
         root.addWidget(self.selected_label)
 
         # --- bottom: table view demo ---------------------------------------
-        title2 = QLabel("现代化表格 (MyTable) - 编辑/勾选/筛选/删除")
+        title2 = QLabel("现代化表格 (MyTable) - 编辑/勾选/筛选/删除/数字比较")
         title2.setObjectName("title")
         hint2 = QLabel(
-            "第1列勾选框；姓名/部门/城市/年龄/工资可双击编辑；最后一列内联“删除”按钮；"
-            "鼠标悬停表头显示↑↓排序与漏斗筛选(已启用时漏斗变蓝带红点)；拖动表头可调整列序。"
+            "第1列勾选框；姓名/部门/城市/年龄/工资可双击编辑；操作列没有筛选(已禁用)；"
+            "年龄/工资是数字列 — 筛菜单里有'按数字比较'开关（=, ≠, >, ≥, <, ≤）；"
+            "默认筛选全勾选 = 不过滤；鼠标悬停表头显示↑↓排序与漏斗筛选；拖动表头可调整列序。"
         )
         hint2.setObjectName("hint")
         root.addWidget(title2)
         root.addWidget(hint2)
 
-        self.table = MyTable()
+        self.table = MyTable(skip_filter_columns=[ACTION_COL])
         self.table.set_data(SAMPLE_HEADERS, SAMPLE_ROWS)
         self.table.set_checkable_rows(True, column=CHECK_COL)
         self.table.set_editable_columns(EDITABLE_COLS)
+        # 数字列: 年龄 / 工资
+        self.table.set_column_numeric(AGE_COL, enabled=True)
+        self.table.set_column_numeric(SAL_COL, enabled=True)
 
         delete_delegate = ActionDelegate("删除", parent=self.table)
         delete_delegate.clicked.connect(self._on_delete_one)
