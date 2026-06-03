@@ -87,8 +87,10 @@ class Badge(QWidget):
         ====================  ============================================
         ``QAbstractItemModel`` Auto-track ``rowCount()`` via ``rowsInserted`` /
                                ``rowsRemoved`` / ``modelReset`` signals.
-        ``list``, ``str`` …   Static ``len(source)`` (no auto-update).
-        ``callable``          ``source()`` is called each sync.
+        ``list``, ``str`` …   Static ``len(source)`` (no auto-update — call
+                               :meth:`refresh` after mutating).
+        ``callable``          ``source()`` is called each sync (trigger via
+                               :meth:`refresh`).
         ====================  ============================================
         """
         self._unbind()
@@ -99,6 +101,14 @@ class Badge(QWidget):
             source.modelReset.connect(self._sync)
         self._sync()
         return self
+
+    def refresh(self) -> None:
+        """Re-read the bound source and update the badge count.
+
+        Useful when the source is a plain ``list`` / ``dict`` / ``str``
+        that was mutated externally (no signals to auto-track).
+        """
+        self._sync()
 
     # ---- internal ---------------------------------------------------------
 
