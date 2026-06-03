@@ -11,7 +11,6 @@ DragBar 交互演示
 - 空区域拖拽：橡皮框批量选中
 """
 import sys
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QGroupBox, QHBoxLayout, QLabel, QPushButton,
     QVBoxLayout, QWidget,
@@ -38,15 +37,15 @@ for name, text, icon in [
     ("term", "终端", "utilities-terminal"),
     ("browser", "浏览器", "web-browser"),
 ]:
-    bar1.add_item(name, text, QIcon.fromTheme(icon))
+    bar1.add_item(name, text, icon)
 v.addWidget(bar1)
 
 # ── Bar 2: 固定宽度（换行） ───────────────────────────────────────────
 v.addWidget(QLabel("Bar 2 — 固定 300px 换行（也可接收跨 Bar 拖拽）"))
 bar2 = DragBar(fixed_length=300, spacing=8)
 for i in range(5):
-    bar2.add_item(f"item{i}", f"项{i}", QIcon.fromTheme("document-properties"))
-bar2.add_item("trash_me", "可删", QIcon.fromTheme("document-properties"))
+    bar2.add_item(f"item{i}", f"项{i}", "document-properties")
+bar2.add_item("trash_me", "可删", "document-properties")
 v.addWidget(bar2)
 
 # ── 日志 ─────────────────────────────────────────────────────────────
@@ -87,7 +86,7 @@ btn_desel.clicked.connect(bar1.deselect_all)
 counter = [6]
 btn_add.clicked.connect(lambda: (
     bar1.add_item(f"x{counter[0]}", f"新增{counter[0]}",
-                  QIcon.fromTheme("document-new")),
+                  "document-new"),
     counter.__setitem__(0, counter[0] + 1),
 ))
 btn_info.clicked.connect(

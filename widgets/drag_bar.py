@@ -214,10 +214,16 @@ class _DragItem(QWidget):
         super().__init__(parent)
         self._name = name
         self._text = text
-        self._icon_src = icon if isinstance(icon, str) else ""
+        self._icon_src = ""
         self._icon = QIcon()
         if icon is not None:
-            self._icon = QIcon(icon) if isinstance(icon, str) else icon
+            if isinstance(icon, str):
+                self._icon_src = icon
+                self._icon = QIcon.fromTheme(icon)
+                if self._icon.isNull():
+                    self._icon = QIcon(icon)
+            else:
+                self._icon = icon
         self.selected = False
         self._hovered = False
         self.setFixedSize(64, 64)
@@ -572,7 +578,7 @@ class DragBar(QWidget):
         best_d = 1e9
         for i, n in enumerate(self._names):
             cx = self._widgets[n].geometry().center()
-            d = (local - cx).manhattanLength()
+            d = _manhattan_dist(local, cx)
             if d < best_d:
                 best_d = d
                 best = i
