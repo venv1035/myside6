@@ -1017,8 +1017,8 @@ class MyTable(QTableView):
 
         # Remove the dotted focus rectangle from all items.
         self.setItemDelegate(NoFocusDelegate(self))
-        # Clicking any cell toggles the row checkbox (when checkable_rows enabled).
-        self.clicked.connect(self._on_row_clicked)
+        # Auto-check rows when selected via drag / shift-click / single click.
+        self.selectionModel().selectionChanged.connect(self._on_sel_changed)
 
         self._checkable_rows = False
         self._check_column = 0
@@ -1090,6 +1090,7 @@ class MyTable(QTableView):
                 pass
         self._proxy.setSourceModel(model)
         super().setModel(self._proxy)
+        self.selectionModel().selectionChanged.connect(self._on_sel_changed)
         if isinstance(model, QStandardItemModel):
             model.itemChanged.connect(self._on_source_item_changed)
         self._apply_flags_to_all()
@@ -1208,29 +1209,22 @@ class MyTable(QTableView):
     # ------------------------------------------------------------------
     # checkable rows
     # ------------------------------------------------------------------
-    def _on_row_clicked(self, index: QModelIndex) -> None:
-        """Auto-toggle checkbox for the clicked row (when checkable rows enabled).
-        Skipped when clicking directly on the checkbox column — the default
-        delegate already handles the toggle there; toggling again would cancel it.
-        """
+    def _on_sel_changed(self, selected: QItemSelection, deselected: QItemSelection) -> None:
         if not self._checkable_rows:
             return
-        if index.column() == self._check_column:
+        source = self._proxy.sourceModel()
+        if source is None:
             return
-        proxy = index.model()
-        if not isinstance(proxy, QSortFilterProxyModel):
-            return
-        source_model = proxy.sourceModel()
-        if source_model is None:
-            return
-        src_idx = proxy.mapToSource(index)
-        if not src_idx.isValid():
-            return
-        src_row = src_idx.row()
-        item = source_model.item(src_row, self._check_column)
-        if item is not None and (item.flags() & Qt.ItemIsUserCheckable):
-            new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
-            item.setCheckState(new_state)
+        seen: set[int] = set()
+        for idx in selected.indexes():
+            src_idx = self._proxy.mapToSource(idx)
+            if src_idx.isValid():
+                row = src_idx.row()
+                if row not in seen:
+                    seen.add(row)
+                    item = source.item(row, self._check_column)
+                    if item is not None and (item.flags() & Qt.ItemIsUserCheckable):
+                        item.setCheckState(Qt.Checked)
 
     def _on_header_check_all(self, column: int) -> None:
         """Toggle all row checkboxes (全选 / 取消全选)."""
