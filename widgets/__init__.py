@@ -1,4 +1,4 @@
-from .badge import Badge
+from .badge import Badge, BadgeList, BadgeDict
 from .my_table import MyTable, ActionDelegate, ACTION_STYLES
 from .my_combo import (
     MyCombo,
@@ -11,6 +11,8 @@ from .my_combo import (
 
 __all__ = [
     "Badge",
+    "BadgeList",
+    "BadgeDict",
     "MyTable",
     "ActionDelegate",
     "ACTION_STYLES",

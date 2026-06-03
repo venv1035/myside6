@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractItemModel, QEvent, QPoint, Qt
+from PySide6.QtCore import QAbstractItemModel, QEvent, QObject, QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -19,15 +19,20 @@ class Badge(QWidget):
         badge = Badge(target=button, color="#ea4335")
         badge.set_count(5)
 
-        # Bind to a model — auto-tracks rowCount changes
+        # Auto-track a model
         badge.bind(table.sourceModel())
 
-        # Bind to any sized object (static)
-        badge.bind(my_list)
-        badge.bind("chars")
+        # Auto-track a list / dict via wrappers
+        items = BadgeList(["a", "b", "c"])
+        Badge(target=btn).bind(items)
+        items.append("d")    # badge auto 4
+
+        scores = BadgeDict({"alice": 90})
+        Badge(target=btn).bind(scores)
+        scores["bob"] = 85   # badge auto 2
 
         # Chained in constructor
-        Badge(target=btn).bind(model)
+        Badge(target=btn).bind(table.sourceModel())
     """
 
     def __init__(self, target: QWidget | None = None,
@@ -82,16 +87,22 @@ class Badge(QWidget):
     def bind(self, source) -> Badge:
         """Bind the badge count to *source*. Returns ``self`` for chaining.
 
-        ====================  ============================================
-        ``source`` type       Behaviour
-        ====================  ============================================
-        ``QAbstractItemModel`` Auto-track ``rowCount()`` via ``rowsInserted`` /
-                               ``rowsRemoved`` / ``modelReset`` signals.
-        ``list``, ``str`` …   Static ``len(source)`` (no auto-update — call
-                               :meth:`refresh` after mutating).
-        ``callable``          ``source()`` is called each sync (trigger via
-                               :meth:`refresh`).
-        ====================  ============================================
+        =======================  ============================================
+        ``source`` type          Behaviour
+        =======================  ============================================
+        ``QAbstractItemModel``   Auto-track ``rowCount()`` via ``rowsInserted`` /
+                                 ``rowsRemoved`` / ``modelReset`` signals.
+        ``BadgeList``            Auto-track ``len()`` via ``changed`` signal.
+        ---                      (see :class:`BadgeList`)
+        ``BadgeDict``            Auto-track ``len()`` via ``changed`` signal.
+        ---                      (see :class:`BadgeDict`)
+        Any object with a        Auto-track via ``changed`` signal.
+        ``changed`` signal
+        ``list``, ``str`` …      Static ``len(source)`` (no auto-update — call
+                                 :meth:`refresh` after mutating).
+        ``callable``             ``source()`` is called each sync (trigger via
+                                 :meth:`refresh`).
+        =======================  ============================================
         """
         self._unbind()
         self._source = source
@@ -99,6 +110,11 @@ class Badge(QWidget):
             source.rowsInserted.connect(self._sync)
             source.rowsRemoved.connect(self._sync)
             source.modelReset.connect(self._sync)
+        elif hasattr(source, "changed"):
+            try:
+                source.changed.connect(self._sync)
+            except (TypeError, RuntimeError):
+                pass
         self._sync()
         return self
 
@@ -114,18 +130,18 @@ class Badge(QWidget):
 
     def _unbind(self) -> None:
         src = self._source
+        if src is None:
+            return
         if isinstance(src, QAbstractItemModel):
+            for sig in ("rowsInserted", "rowsRemoved", "modelReset"):
+                try:
+                    getattr(src, sig).disconnect(self._sync)
+                except RuntimeError:
+                    pass
+        elif hasattr(src, "changed"):
             try:
-                src.rowsInserted.disconnect(self._sync)
-            except RuntimeError:
-                pass
-            try:
-                src.rowsRemoved.disconnect(self._sync)
-            except RuntimeError:
-                pass
-            try:
-                src.modelReset.disconnect(self._sync)
-            except RuntimeError:
+                src.changed.disconnect(self._sync)
+            except (RuntimeError, TypeError):
                 pass
         self._source = None
 
@@ -203,3 +219,171 @@ class Badge(QWidget):
         text = self._display_text()
         painter.setPen(self._text_color)
         painter.drawText(r, Qt.AlignCenter, text)
+
+
+class BadgeList(QObject):
+    """A ``list`` wrapper that emits ``changed`` on every mutation.
+
+    Use with :meth:`Badge.bind` for auto-tracking::
+
+        items = BadgeList(["a", "b", "c"])
+        Badge(target=btn).bind(items)    # → 3
+        items.append("d")                # badge auto → 4
+        items.clear()                    # badge auto → 0 (hidden)
+    """
+
+    changed = Signal()
+
+    def __init__(self, items=None, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._data = list(items) if items is not None else []
+
+    # ---- read interface ---------------------------------------------------
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __getitem__(self, index):
+        return self._data[index]
+
+    def __contains__(self, item) -> bool:
+        return item in self._data
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+    def __bool__(self) -> bool:
+        return bool(self._data)
+
+    def count(self, item) -> int:
+        return self._data.count(item)
+
+    def index(self, item, *args) -> int:
+        return self._data.index(item, *args)
+
+    # ---- mutating interface -----------------------------------------------
+    def append(self, item) -> None:
+        self._data.append(item)
+        self.changed.emit()
+
+    def extend(self, items) -> None:
+        self._data.extend(items)
+        self.changed.emit()
+
+    def insert(self, index, item) -> None:
+        self._data.insert(index, item)
+        self.changed.emit()
+
+    def remove(self, item) -> None:
+        self._data.remove(item)
+        self.changed.emit()
+
+    def pop(self, index=-1):
+        val = self._data.pop(index)
+        self.changed.emit()
+        return val
+
+    def clear(self) -> None:
+        self._data.clear()
+        self.changed.emit()
+
+    def sort(self, *, key=None, reverse=False) -> None:
+        self._data.sort(key=key, reverse=reverse)
+        self.changed.emit()
+
+    def reverse(self) -> None:
+        self._data.reverse()
+        self.changed.emit()
+
+    def __setitem__(self, index, value) -> None:
+        self._data[index] = value
+        self.changed.emit()
+
+    def __delitem__(self, index) -> None:
+        del self._data[index]
+        self.changed.emit()
+
+    def __iadd__(self, items):
+        self._data += list(items)
+        self.changed.emit()
+        return self
+
+
+class BadgeDict(QObject):
+    """A ``dict`` wrapper that emits ``changed`` on every mutation.
+
+    Use with :meth:`Badge.bind` for auto-tracking::
+
+        d = BadgeDict({"alice": 90, "bob": 85})
+        Badge(target=btn).bind(d)          # → 2
+        d["charlie"] = 95                  # badge auto → 3
+        d.clear()                          # badge auto → 0 (hidden)
+    """
+
+    changed = Signal()
+
+    def __init__(self, items=None, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._data = dict(items) if items is not None else {}
+
+    # ---- read interface ---------------------------------------------------
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __contains__(self, key) -> bool:
+        return key in self._data
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    # ---- mutating interface -----------------------------------------------
+    def __setitem__(self, key, value) -> None:
+        self._data[key] = value
+        self.changed.emit()
+
+    def __delitem__(self, key) -> None:
+        del self._data[key]
+        self.changed.emit()
+
+    def clear(self) -> None:
+        self._data.clear()
+        self.changed.emit()
+
+    def update(self, *args, **kwargs) -> None:
+        self._data.update(*args, **kwargs)
+        self.changed.emit()
+
+    def setdefault(self, key, default=None):
+        val = self._data.setdefault(key, default)
+        self.changed.emit()
+        return val
+
+    def pop(self, key, *args):
+        val = self._data.pop(key, *args)
+        self.changed.emit()
+        return val
+
+    def popitem(self):
+        val = self._data.popitem()
+        self.changed.emit()
+        return val
