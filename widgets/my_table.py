@@ -967,9 +967,7 @@ class _FilterHeaderView(QHeaderView):
                     super().mousePressEvent(event)
                     return
                 icon_rect = self._icon_rect(section)
-                visible = (section in self._active_columns
-                           or section == self._hover_section)
-                if visible and icon_rect.contains(event.position().toPoint()):
+                if icon_rect.contains(event.position().toPoint()):
                     global_pos = self.mapToGlobal(QPoint(icon_rect.left(), self.height()))
                     self.filterClicked.emit(section, global_pos)
                     return
