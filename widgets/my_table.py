@@ -1019,6 +1019,9 @@ class MyTable(QTableView):
         self.setItemDelegate(NoFocusDelegate(self))
         # Auto-check rows when selected via drag / shift-click / single click.
         self.selectionModel().selectionChanged.connect(self._on_sel_changed)
+        # Right-click context menu for batch operations.
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
         self._checkable_rows = False
         self._check_column = 0
@@ -1209,6 +1212,34 @@ class MyTable(QTableView):
     # ------------------------------------------------------------------
     # checkable rows
     # ------------------------------------------------------------------
+    def _show_context_menu(self, pos: QPoint) -> None:
+        menu = QMenu(self)
+        sel_count = len(self.selectionModel().selectedRows())
+        if sel_count > 0:
+            a = menu.addAction(f"删除选中行 ({sel_count})")
+            a.triggered.connect(lambda: self.delete_selected_rows())
+        chk_count = len(self.checked_rows())
+        if chk_count > 0:
+            a = menu.addAction(f"删除已勾选行 ({chk_count})")
+            a.triggered.connect(lambda: self.delete_checked_rows())
+        if sel_count > 0 or chk_count > 0:
+            menu.addSeparator()
+        if self._checkable_rows:
+            src = self._proxy.sourceModel()
+            all_checked = (
+                src is not None
+                and all(
+                    src.item(r, self._check_column).checkState() == Qt.Checked
+                    for r in range(src.rowCount())
+                    if src.item(r, self._check_column) is not None
+                )
+            )
+            menu.addAction("取消全选" if all_checked else "全选").triggered.connect(
+                lambda: self.set_all_checked(not all_checked)
+            )
+        menu.addAction("清空筛选").triggered.connect(self.clear_filters)
+        menu.exec(self.mapToGlobal(pos))
+
     def _on_sel_changed(self, selected: QItemSelection, deselected: QItemSelection) -> None:
         if not self._checkable_rows:
             return
