@@ -978,6 +978,7 @@ class MyTable(QTableView):
             QTableView::item { padding: 6px 8px; border: none; }
             QTableView::item:hover { background: #f1f3f4; }
             QTableView::item:selected { background: #e8f0fe; color: #1a73e8; }
+            QTableView::item:focus { outline: none; }
 
             QHeaderView::section {
                 background: #f8f9fa;
