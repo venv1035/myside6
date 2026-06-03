@@ -13,6 +13,11 @@ from PySide6.QtWidgets import (
 _MIME = "application/x-dragbar-items"
 
 
+def _manhattan_dist(a: QPoint, b: QPoint) -> int:
+    """Manhattan length between two QPoints (avoids PySide6 QPoint.__sub__ bug)."""
+    return abs(a.x() - b.x()) + abs(a.y() - b.y())
+
+
 # ── helpers ─────────────────────────────────────────────────────────────
 
 def _mime_data(names, items_meta, source_id: int) -> QMimeData:
@@ -272,7 +277,7 @@ class _DragItem(QWidget):
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
-            d = (event.position().toPoint() - self._drag_start).manhattanLength()
+            d = _manhattan_dist(event.position().toPoint(), self._drag_start)
             if d > QApplication.startDragDistance():
                 self.dragRequested.emit(self._name)
         super().mouseMoveEvent(event)
@@ -610,7 +615,7 @@ class DragBar(QWidget):
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton and hasattr(self, "_rubber_origin"):
-            d = (event.position().toPoint() - self._rubber_origin).manhattanLength()
+            d = _manhattan_dist(event.position().toPoint(), self._rubber_origin)
             if d > QApplication.startDragDistance():
                 origin_flow = self._flow_widget.mapFrom(self, self._rubber_origin)
                 pos_flow = self._flow_widget.mapFrom(self, event.position().toPoint())
