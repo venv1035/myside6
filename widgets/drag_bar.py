@@ -460,6 +460,11 @@ class DragBar(QWidget):
         if not names:
             return
 
+        # clear any leftover rubber band state
+        self._rubber_rect = None
+        self._rubber_origin = None
+        self._flow_widget.update()
+
         drag = QDrag(self)
         meta = {n: {"text": self._widgets[n]._text,
                      "icon": self._widgets[n]._icon_src}
@@ -640,15 +645,16 @@ class DragBar(QWidget):
                 self._flow_widget.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._rubber_rect is not None:
-            sel = set()
-            for n, w in self._widgets.items():
-                if self._rubber_rect.intersects(w.geometry()):
-                    sel.add(n)
-            if sel:
-                self._selected = sel
-                self._update_selection()
-                self.selection_changed.emit(list(self._selected))
+        if event.button() == Qt.LeftButton:
+            if self._rubber_rect is not None:
+                sel = set()
+                for n, w in self._widgets.items():
+                    if self._rubber_rect.intersects(w.geometry()):
+                        sel.add(n)
+                if sel:
+                    self._selected = sel
+                    self._update_selection()
+                    self.selection_changed.emit(list(self._selected))
             self._rubber_rect = None
             self._rubber_origin = None
             self._flow_widget.update()
