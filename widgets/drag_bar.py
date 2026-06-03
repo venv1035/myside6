@@ -176,13 +176,13 @@ class _DropContainer(QWidget):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        bar = self._bar
-        if bar._rubber_rect is not None:
+        rr = getattr(self._bar, '_rubber_rect', None)
+        if rr is not None:
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
             p.setPen(QPen(QColor(26, 115, 232), 1.5))
             p.setBrush(QColor(26, 115, 232, 25))
-            p.drawRect(bar._rubber_rect)
+            p.drawRect(rr)
 
     def dragEnterEvent(self, event):
         self._bar._on_drag_enter(event)
@@ -312,7 +312,9 @@ class DragBar(QWidget):
         self._widgets: dict[str, _DragItem] = {}
         self._selected: set[str] = set()
         self._last_clicked: str | None = None
-        self._drag_data: dict | None = None  # current drag payload
+        self._rubber_origin: QPoint | None = None
+        self._rubber_rect: QRect | None = None
+        self._drag_data: dict | None = None
 
         # container with flow layout + drop forwarding
         self._flow_widget = _DropContainer(self)
@@ -575,6 +577,7 @@ class DragBar(QWidget):
         if tidx >= 0:
             self._flow.takeAt(tidx)
         self._flow.addWidget(self._trash)
+        self._flow_widget.updateGeometry()
 
     # ── trash ───────────────────────────────────────────────────────────
 
