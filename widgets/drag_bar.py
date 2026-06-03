@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QMimeData, QObject, QPoint, QRect, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDrag, QFont, QIcon, QMouseEvent, QPainter, QPen, QPixmap,
 )
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton,
     QScrollArea, QVBoxLayout, QWidget, QWidgetItem,
@@ -44,13 +45,19 @@ def _parse_mime(event) -> dict | None:
 
 # ── DragBarItem (data object) ────────────────────────────────────────────
 
-class DragBarItem:
+class DragBarItem(QObject):
     """Data object for a single DragBar item.
 
     Auto‑supports move / delete / reset when added to a DragBar.
+    Icon 支持主题名 (``"folder"``)、本地路径 (``"C:/img.png"``)、
+    或 URL (``"https://example.com/icon.png"``)。
     """
 
+    icon_changed = Signal()
+    _net: QNetworkAccessManager | None = None
+
     def __init__(self, name: str, text: str, icon=None):
+        super().__init__()
         self.name = name
         self.text = text
         self._icon_src = ""
@@ -58,11 +65,33 @@ class DragBarItem:
         if icon is not None:
             if isinstance(icon, str):
                 self._icon_src = icon
-                self._icon = QIcon.fromTheme(icon)
-                if self._icon.isNull():
-                    self._icon = QIcon(icon)
+                if icon.startswith("http://") or icon.startswith("https://"):
+                    self._download_icon(icon)
+                else:
+                    self._icon = QIcon.fromTheme(icon)
+                    if self._icon.isNull():
+                        self._icon = QIcon(icon)
             else:
                 self._icon = icon
+
+    @classmethod
+    def _get_net(cls) -> QNetworkAccessManager:
+        if cls._net is None:
+            cls._net = QNetworkAccessManager()
+        return cls._net
+
+    def _download_icon(self, url: str):
+        mgr = self._get_net()
+        reply = mgr.get(QNetworkRequest(QUrl(url)))
+        reply.finished.connect(lambda r=reply: self._on_icon_downloaded(r))
+
+    def _on_icon_downloaded(self, reply):
+        data = reply.readAll()
+        px = QPixmap()
+        if px.loadFromData(data) and not px.isNull():
+            self._icon = QIcon(px)
+            self.icon_changed.emit()
+        reply.deleteLater()
 
     @property
     def icon_src(self) -> str:
@@ -556,6 +585,7 @@ class DragBar(QWidget):
         w = _DragItem(item, parent=self._flow_widget)
         w.dragRequested.connect(self._on_item_drag_requested)
         w.clicked.connect(self._on_item_clicked)
+        item.icon_changed.connect(w.update)
         self._items.append(item)
         self._widgets[item.name] = w
         self._flow.insertWidget(self._flow.count() - 2, w)
@@ -572,6 +602,7 @@ class DragBar(QWidget):
         w = _DragItem(item, parent=self._flow_widget)
         w.dragRequested.connect(self._on_item_drag_requested)
         w.clicked.connect(self._on_item_clicked)
+        item.icon_changed.connect(w.update)
         self._items.insert(index, item)
         self._widgets[item.name] = w
         self._flow.insertWidget(index, w)
