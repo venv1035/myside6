@@ -883,10 +883,11 @@ class _FilterHeaderView(QHeaderView):
 
         # ---- 全选 checkbox for the check column --------------------------
         if logical_index == self._check_column:
-            cb_opt = QStyleOptionButton()
-            cb_sz = 18
-            cb_x = rect.x() + (rect.width() - cb_sz) // 2
+            cb_sz = 14
+            margin_left = 8
+            cb_x = rect.x() + margin_left
             cb_y = rect.y() + (rect.height() - cb_sz) // 2
+            cb_opt = QStyleOptionButton()
             cb_opt.rect = QRect(cb_x, cb_y, cb_sz, cb_sz)
             cb_opt.state = QStyle.State_Enabled
             if self._all_checked:
@@ -894,6 +895,13 @@ class _FilterHeaderView(QHeaderView):
             else:
                 cb_opt.state |= QStyle.State_Off
             self.style().drawPrimitive(QStyle.PE_IndicatorCheckBox, cb_opt, painter)
+            # "全选" text to the right of the checkbox
+            text_x = cb_x + cb_sz + 3
+            text_rect = QRect(text_x, rect.y(), rect.right() - text_x, rect.height())
+            painter.save()
+            painter.setPen(self.palette().windowText().color())
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, "全选")
+            painter.restore()
 
         sort_col = self.sortIndicatorSection()
         sort_order = self.sortIndicatorOrder()
@@ -949,11 +957,14 @@ class _FilterHeaderView(QHeaderView):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             section = self.logicalIndexAt(event.position().toPoint())
-            if section >= 0 and section not in self._skip_filter_columns:
-                # 全选 header checkbox click
-                if section == self._check_column:
+            if section >= 0:
+                # 全选 header checkbox click (check column may be in skip list)
+                if section == self._check_column and self._check_column >= 0:
                     self.checkAllClicked.emit(section)
                     event.accept()
+                    return
+                if section in self._skip_filter_columns:
+                    super().mousePressEvent(event)
                     return
                 icon_rect = self._icon_rect(section)
                 visible = (section in self._active_columns
@@ -1249,7 +1260,7 @@ class MyTable(QTableView):
         self._header.set_all_checked(False)
         if enabled:
             self._header.set_filter_skipped(column, True)
-            self.setColumnWidth(column, 36)
+            self.setColumnWidth(column, 56)
         else:
             self._header.set_filter_skipped(column, False)
         self._apply_flags_to_all()
