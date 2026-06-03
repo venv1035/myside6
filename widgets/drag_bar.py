@@ -481,6 +481,8 @@ class DragBar(QWidget):
             self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setWidget(self._flow_widget)
+        self._scroll.viewport().setAutoFillBackground(False)
+        self._flow_widget.setAutoFillBackground(False)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -525,6 +527,10 @@ class DragBar(QWidget):
             self._close_btn.move(self.width() - 22, 2)
 
     # ── style ────────────────────────────────────────────────────────────
+
+    def set_style(self, style: dict) -> None:
+        self._style.update(style)
+        self._apply_style()
 
     def _apply_style(self):
         bg = self._style.get("background", "transparent")
