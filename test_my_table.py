@@ -7,7 +7,7 @@ MyTable MVP
 """
 import sys
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
-from widgets import MyTable, ActionDelegate
+from widgets import MyTable, ActionDelegate,ACTION_STYLES
 
 EDITABLE_COLS = [1, 2, 3, 4]
 ACTION_COL = 5
@@ -35,7 +35,7 @@ t.set_checkable_rows(True, CHECK_COL)
 t.set_editable_columns(EDITABLE_COLS)
 t.set_column_numeric(4, True)
 
-d = ActionDelegate("大宝贝", parent=t)
+d = ActionDelegate("大宝贝", parent=t,style=ACTION_STYLES["info"])
 d.clicked.connect(lambda src_row: t.delete_rows([src_row]))
 t.setItemDelegateForColumn(ACTION_COL, d)
 t.setColumnWidth(ACTION_COL, 90)

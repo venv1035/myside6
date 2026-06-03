@@ -1487,6 +1487,11 @@ ACTION_STYLES = {
     "confirm":  dict(bg_normal="#ffffff", bg_hover="#e8f5e9", border="#43a047", color="#2e7d32"),
     "info":     dict(bg_normal="#ffffff", bg_hover="#e3f2fd", border="#1e88e5", color="#1565c0"),
     "warning":  dict(bg_normal="#ffffff", bg_hover="#fff3e0", border="#fb8c00", color="#e65100"),
+    # Solid filled variants (no outline, background is the accent colour).
+    "delete_solid":  dict(bg_normal="#ea4335", bg_hover="#d93025", border="#ea4335", color="#ffffff", filled=True),
+    "confirm_solid": dict(bg_normal="#43a047", bg_hover="#2e7d32", border="#43a047", color="#ffffff", filled=True),
+    "info_solid":    dict(bg_normal="#1e88e5", bg_hover="#1565c0", border="#1e88e5", color="#ffffff", filled=True),
+    "warning_solid": dict(bg_normal="#fb8c00", bg_hover="#e65100", border="#fb8c00", color="#ffffff", filled=True),
 }
 
 
@@ -1505,6 +1510,11 @@ class ActionDelegate(QStyledItemDelegate):
 
         delegate = ActionDelegate("确认", parent=table,
                                   style=ACTION_STYLES["confirm"])
+
+    For a solid filled button (no outline, coloured background)::
+
+        delegate = ActionDelegate("删除", parent=table,
+                                  style=ACTION_STYLES["delete_solid"])
     """
 
     clicked = Signal(int)  # source row index
@@ -1519,6 +1529,7 @@ class ActionDelegate(QStyledItemDelegate):
         self._bg_hover = s["bg_hover"]
         self._border = s["border"]
         self._color = s["color"]
+        self._filled = s.get("filled", False)
         if parent is not None:
             parent.setMouseTracking(True)
             parent.viewport().installEventFilter(self)
@@ -1531,7 +1542,8 @@ class ActionDelegate(QStyledItemDelegate):
             painter.fillRect(option.rect, QColor("#f1f3f4"))
         rect = option.rect.adjusted(6, 4, -6, -4)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(QPen(QColor(self._border), 1))
+        painter.setPen(Qt.NoPen if self._filled
+                       else QPen(QColor(self._border), 1))
         painter.setBrush(QColor(self._bg_hover) if self._hover_row == index.row()
                          else QColor(self._bg_normal))
         painter.drawRoundedRect(rect, 6, 6)
