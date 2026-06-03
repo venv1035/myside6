@@ -11,6 +11,7 @@ from PySide6.QtCore import (
     QSortFilterProxyModel,
     Qt,
     Signal,
+    QTimer,
 )
 from PySide6.QtGui import (
     QAction,
@@ -322,6 +323,12 @@ class _FilterPopup(QFrame):
         self._numeric_mode = numeric
         self._condition_rows: list[_NumericConditionRow] = []
 
+        # Hover-leave auto-close timer (220ms, like MyCombo).
+        self._leave_close_timer = QTimer(self)
+        self._leave_close_timer.setSingleShot(True)
+        self._leave_close_timer.setInterval(220)
+        self._leave_close_timer.timeout.connect(self._check_close_on_hover_leave)
+
         self.setStyleSheet(
             """
             QFrame {
@@ -418,15 +425,15 @@ class _FilterPopup(QFrame):
             self._add_btn.clicked.connect(lambda: (self._add_condition_row("=", 0.0),
                                                    self._sync_remove_buttons()))
 
-        # Text-mode widgets: search box + (全选) + list.
+        # Text-mode widgets: 全选 checkbox → search box → list.
+        self._select_all = QCheckBox("全选", self)
+        self._select_all.setTristate(True)
+        v.addWidget(self._select_all)
+
         self._search = QLineEdit(self)
         self._search.setPlaceholderText("搜索...")
         self._search.setClearButtonEnabled(True)
         v.addWidget(self._search)
-
-        self._select_all = QCheckBox("全选", self)
-        self._select_all.setTristate(True)
-        v.addWidget(self._select_all)
 
         self._list = _CheckListWidget(self)
         self._list.setSelectionMode(QAbstractItemView.NoSelection)
@@ -749,6 +756,27 @@ class _FilterPopup(QFrame):
             self._hover_only_btn.hide()
             self._hover_only_target = None
         return super().eventFilter(watched, event)
+
+    # ---- hover-leave auto-close (mirrors MyCombo) -----------------------
+    def enterEvent(self, event) -> None:
+        self._leave_close_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._leave_close_timer.start()
+        super().leaveEvent(event)
+
+    def _check_close_on_hover_leave(self) -> None:
+        """Close the popup if the cursor is not over any of its children."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QApplication
+        pos = QCursor.pos()
+        w = QApplication.widgetAt(pos)
+        while w is not None:
+            if w is self:
+                return
+            w = w.parentWidget()
+        self.close()
 
 
 class _FilterHeaderView(QHeaderView):

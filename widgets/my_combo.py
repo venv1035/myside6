@@ -241,6 +241,8 @@ class _MultiSelectPopup(QFrame):
         self.setMouseTracking(True)
         self._search_in_popup = search_in_popup
         self._string_only = string_only
+        self._snapshot: list[Qt.CheckState] | None = None
+        self._ok_clicked: bool = False
 
         self._apply_style()
         self._build_widgets()
@@ -341,7 +343,7 @@ class _MultiSelectPopup(QFrame):
         self._select_all_cb.setTristate(True)
         outer.addWidget(self._select_all_cb)
 
-        # -- bottom button row (反选 / 重置     已选 N 项) -----------------
+        # -- bottom button row (反选 / 重置     已选 N 项     取消 / 确定) --
         self._btn_row_widget = QWidget(self)
         btn_row = QHBoxLayout(self._btn_row_widget)
         btn_row.setContentsMargins(0, 0, 0, 0)
@@ -355,10 +357,12 @@ class _MultiSelectPopup(QFrame):
         self._count_label.setObjectName("hint")
         self._count_label.setEnabled(False)
         btn_row.addWidget(self._count_label)
-        # NOTE: ``string_only`` no longer hides the button row -- the popup's
-        # multi-select behaviour is unchanged in that mode.  The only
-        # thing string_only affects is whether the main line edit stays
-        # user-editable.
+        btn_row.addSpacing(8)
+        self._cancel_btn = QPushButton("取消", self._btn_row_widget)
+        self._ok_btn = QPushButton("确定", self._btn_row_widget)
+        self._ok_btn.setObjectName("primary")
+        btn_row.addWidget(self._cancel_btn)
+        btn_row.addWidget(self._ok_btn)
 
         # -- search box (optional) ----------------------------------------
         self._search_edit = QLineEdit(self)
@@ -415,6 +419,8 @@ class _MultiSelectPopup(QFrame):
         self._select_all_cb.clicked.connect(self._on_select_all_cb_clicked)
         self._invert_btn.clicked.connect(self._invert_visible)
         self._clear_btn.clicked.connect(self._clear_visible)
+        self._ok_btn.clicked.connect(self._on_ok)
+        self._cancel_btn.clicked.connect(self._on_cancel)
         self._sort_asc_btn.clicked.connect(lambda: self._sort_visible(Qt.AscendingOrder))
         self._sort_desc_btn.clicked.connect(lambda: self._sort_visible(Qt.DescendingOrder))
         self._list.itemChanged.connect(self._on_item_changed)
@@ -435,6 +441,9 @@ class _MultiSelectPopup(QFrame):
         self._list.blockSignals(False)
         self._update_count()
         self._sync_select_all_cb()
+        self._snapshot = [self._list.item(i).checkState()
+                          for i in range(self._list.count())]
+        self._ok_clicked = False
 
     def selected_values(self) -> list:
         return [self._list.item(i).data(Qt.UserRole)
@@ -457,8 +466,13 @@ class _MultiSelectPopup(QFrame):
         super().leaveEvent(event)
 
     def hideEvent(self, event) -> None:
-        # Reset the hover overlay whenever the popup closes — otherwise
-        # the next time it opens the button may be at a stale position.
+        # If the popup is closing without "确定" (e.g. outside-click, Esc,
+        # hover-leave timer), restore the snapshot so buffered changes are
+        # discarded automatically — just like "取消".
+        if not self._ok_clicked:
+            self._restore_snapshot()
+        self._ok_clicked = False
+        # Reset the hover overlay.
         self._hover_only_btn.hide()
         self._hover_only_target = None
         super().hideEvent(event)
@@ -504,7 +518,8 @@ class _MultiSelectPopup(QFrame):
     def _on_select_all_cb_clicked(self) -> None:
         # Toggle: if every visible item is checked, un-check them; else
         # check them all. Mirrors the MyTable filter-popup "全选" behaviour
-        # (click twice = "反选效果" / uncheck all).
+        # (click twice = "反选效果" / uncheck all). Buffered mode — does
+        # NOT emit ``selectionChanged``; the user must click 确定 to apply.
         self._list.blockSignals(True)
         visible = [i for i in range(self._list.count())
                    if not self._list.item(i).isHidden()]
@@ -517,8 +532,6 @@ class _MultiSelectPopup(QFrame):
         self._list.blockSignals(False)
         if visible:
             self._update_count()
-            self.selectionChanged.emit(self.selected_values())
-            self._sync_select_all_cb()
 
     def _sync_select_all_cb(self) -> None:
         """Sync the tristate "全选" checkbox with the visible items' state."""
@@ -541,9 +554,8 @@ class _MultiSelectPopup(QFrame):
         self._select_all_cb.blockSignals(False)
 
     def _invert_visible(self) -> None:
-        """Toggle every currently visible item's check state."""
+        """Toggle every currently visible item's check state. Buffered — no signal."""
         self._list.blockSignals(True)
-        changed = False
         for i in range(self._list.count()):
             item = self._list.item(i)
             if item.isHidden():
@@ -551,30 +563,48 @@ class _MultiSelectPopup(QFrame):
             new_state = (Qt.Unchecked if item.checkState() == Qt.Checked
                          else Qt.Checked)
             item.setCheckState(new_state)
-            changed = True
         self._list.blockSignals(False)
-        if changed:
-            self._update_count()
-            self.selectionChanged.emit(self.selected_values())
+        self._update_count()
 
     def _clear_visible(self) -> None:
-        """Uncheck every currently visible item. Does **not** close the popup."""
+        """Uncheck every currently visible item. Buffered — no signal, does not close."""
         self._list.blockSignals(True)
-        changed = False
         for i in range(self._list.count()):
             item = self._list.item(i)
             if not item.isHidden() and item.checkState() == Qt.Checked:
                 item.setCheckState(Qt.Unchecked)
-                changed = True
         self._list.blockSignals(False)
-        if changed:
-            self._update_count()
-            self.selectionChanged.emit(self.selected_values())
+        self._update_count()
 
     def _on_item_changed(self, _item: QListWidgetItem) -> None:
+        # Buffered mode: update UI state only, no signal until 确定.
         self._update_count()
-        self._sync_select_all_cb()
-        self.selectionChanged.emit(self.selected_values())
+
+    # ---- buffered 确定 / 取消 -------------------------------------------
+    def _on_ok(self) -> None:
+        """Apply buffered selection changes and close the popup."""
+        current = [self._list.item(i).checkState()
+                   for i in range(self._list.count())]
+        if current != self._snapshot:
+            self.selectionChanged.emit(self.selected_values())
+            self._snapshot = current
+        self._ok_clicked = True
+        self.requestClose.emit()
+
+    def _on_cancel(self) -> None:
+        """Discard buffered changes, restore snapshot, and close."""
+        self._restore_snapshot()
+        self.requestClose.emit()
+
+    def _restore_snapshot(self) -> None:
+        if self._snapshot is None:
+            return
+        self._list.blockSignals(True)
+        for i, state in enumerate(self._snapshot):
+            if i < self._list.count():
+                self._list.item(i).setCheckState(state)
+        self._list.blockSignals(False)
+        self._update_count()
 
     # ---- in-popup sort (matches the MyTable filter popup) ---------------
     def _sort_visible(self, order: Qt.SortOrder) -> None:
@@ -630,9 +660,22 @@ class _MultiSelectPopup(QFrame):
         if item is None:
             return
         value = item.data(Qt.UserRole)
+        # Apply immediately: replace selection with only this value, update
+        # snapshot, and close (bypasses the 确定/取消 buffer).
+        self._list.blockSignals(True)
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            it.setCheckState(Qt.Checked if it.data(Qt.UserRole) == value
+                             else Qt.Unchecked)
+        self._list.blockSignals(False)
+        self._update_count()
+        self._snapshot = [self._list.item(i).checkState()
+                          for i in range(self._list.count())]
+        self._ok_clicked = True
         self.filterOnlyThis.emit(value)
-        # After the owner handles the signal (replaces selection with
-        # [value] and closes the popup), there's nothing more to do here.
+        # The owner processes the signal (replaces selection + closes popup).
+        # We do NOT call requestClose here — the owner's filterOnlyThis
+        # handler already calls hide_popup(), which triggers hideEvent.
 
     def eventFilter(self, watched, event):
         # Hide the floating "仅筛此项" button when the mouse leaves the

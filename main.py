@@ -78,9 +78,9 @@ class DemoWindow(QMainWindow):
 
         row = QHBoxLayout()
         row.setSpacing(12)
-        for caption, items, pos, attr in [
-            ("部门(按钮在顶部):", sorted({r[3] for r in SAMPLE_ROWS}), "top", "cb_top"),
-            ("城市(按钮在底部):", sorted({r[4] for r in SAMPLE_ROWS}), "bottom", "cb_bottom"),
+        for caption, items, attr in [
+            ("部门:", sorted({r[3] for r in SAMPLE_ROWS}), "cb_top"),
+            ("城市:", sorted({r[4] for r in SAMPLE_ROWS}), "cb_bottom"),
         ]:
             col = QVBoxLayout()
             col.addWidget(QLabel(caption))
