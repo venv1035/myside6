@@ -459,6 +459,23 @@ if not active and not hover:
   - 点"全选" 2 次：5 个全 Unchecked，"全选"是 Unchecked ← "反选效果"
   - reopen with prior `{"北京","上海"}`：前 2 个 Checked，后 3 个 Unchecked，"全选"是 PartiallyChecked
 
+**二次修复 — 真实 click 路径下第二次 click 无效**：
+
+v2 第一版用 `if self._select_all.checkState() == Qt.Checked: state = Unchecked else: state = Checked` 决定 toggle 方向。看起来对，但用 `QTest.mouseClick` 真实点击复测时第二次 click 无任何反应（5/5 item 保持 Checked）。
+
+根因：`QCheckBox.setTristate(True)` 内部有 3-state cycle（Unchecked → PartiallyChecked → Checked → Unchecked），我们在 handler 里又 `setCheckState(state)` 显式覆盖状态，**把 Qt 的 "next click" 状态机搞乱**——Qt 下一次 click 时基于混乱状态做 cycle，结果状态没变、clicked 信号仍发、handler 跑、但 list 不动。
+
+修复：不再依赖 `self._select_all.checkState()`，**直接看 list 的实际状态**：
+```python
+n = self._list.count()
+all_checked = n > 0 and all(
+    self._list.item(i).checkState() == Qt.Checked for i in range(n)
+)
+state = Qt.Unchecked if all_checked else Qt.Checked
+```
+
+这样无论 Qt 怎么改 QCheckBox 自己的 state，都以 list 数据为准。复测 `QTest.mouseClick` × 3 + 4 个场景（空/prior/partial/search）全部 PASS。
+
 ### 5.10 数字列需要"按数字比较"开关
 
 **现象**：工资 / 年龄这种数字列，列表里有 30, 35, 41... 多选时只能 `set = {30, 35}` 这种枚举式筛选，要找"年龄 > 30 的所有员工"做不了。

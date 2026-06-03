@@ -530,18 +530,22 @@ class _FilterPopup(QFrame):
         self._select_all.blockSignals(False)
 
     def _on_select_all_clicked(self) -> None:
-        # Tristate toggle for the "全选" checkbox at the top of the list.
-        # Cycles Unchecked/PartiallyChecked -> Checked, Checked -> Unchecked.
-        # In particular, the second click on an already-all-checked list
-        # un-checks every item — this is the "反选效果" expected by users
-        # who want to switch between "all visible" and "nothing visible".
-        if self._select_all.checkState() == Qt.Checked:
-            state = Qt.Unchecked
-        else:
-            state = Qt.Checked
+        # Toggle based on the *list* state, not the QCheckBox's own state.
+        # Rationale: a QCheckBox with ``setTristate(True)`` runs a 3-state
+        # cycle internally (Unchecked → PartiallyChecked → Checked → ...),
+        # and our explicit ``setCheckState`` call in this handler can put
+        # the box out of sync with Qt's "next click" machinery — the
+        # second click on an all-checked list then appears to do nothing.
+        # Looking at the list (the actual data) is the only robust way:
+        # all checked → uncheck all; any unchecked → check all.
+        n = self._list.count()
+        all_checked = n > 0 and all(
+            self._list.item(i).checkState() == Qt.Checked for i in range(n)
+        )
+        state = Qt.Unchecked if all_checked else Qt.Checked
         self._select_all.setCheckState(state)
         self._list.blockSignals(True)
-        for i in range(self._list.count()):
+        for i in range(n):
             self._list.item(i).setCheckState(state)
         self._list.blockSignals(False)
         self._sync_selected_from_list()
