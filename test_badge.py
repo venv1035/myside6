@@ -1,13 +1,18 @@
 """
-Badge + MyTable 联动演示
-========================
+Badge bind() 综合演示
+=====================
 运行 ``uv run python test_badge.py`` 弹出窗口。
 
-表格 10 行，Badge 通过 ``.bind(model)`` 自动追踪行数。
+演示 4 种数据源绑定:
+  - list + refresh()
+  - dict + refresh()
+  - callable + refresh()
+  - QAbstractItemModel → auto-track
 """
 import sys
+from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 from widgets import Badge, MyTable, ActionDelegate
 
@@ -15,19 +20,103 @@ app = QApplication(sys.argv)
 app.setStyle("Fusion")
 
 w = QWidget()
-w.setWindowTitle("Badge bind() 演示")
-w.resize(700, 400)
+w.setWindowTitle("Badge bind() 综合演示")
+w.resize(700, 520)
 
 v = QVBoxLayout(w)
+v.setSpacing(12)
 
-# ---- top bar ---------------------------------------------------------------
+# ====== 1. list + refresh ===============================================
+row1 = QHBoxLayout()
+row1.addWidget(QLabel("list"))
+btn_add = QPushButton("添加")
+btn_clr = QPushButton("清空")
+row1.addWidget(btn_add)
+row1.addWidget(btn_clr)
+row1.addStretch()
+v.addLayout(row1)
+
+data_list = ["a", "b", "c"]
+b1 = Badge(target=btn_add, color="#1a73e8").bind(data_list)
+
+def add_item():
+    data_list.append(f"x{len(data_list)}")
+    b1.refresh()
+def clr_items():
+    data_list.clear()
+    b1.refresh()
+btn_add.clicked.connect(add_item)
+btn_clr.clicked.connect(clr_items)
+
+# ====== 2. dict + refresh ===============================================
+row2 = QHBoxLayout()
+row2.addWidget(QLabel("dict"))
+btn_add_k = QPushButton("加一项")
+btn_clr_d = QPushButton("清空")
+row2.addWidget(btn_add_k)
+row2.addWidget(btn_clr_d)
+row2.addStretch()
+v.addLayout(row2)
+
+data_dict = {"name": "张三"}
+b2 = Badge(target=btn_add_k, color="#43a047").bind(data_dict)
+
+def add_kv():
+    data_dict[f"k{len(data_dict)}"] = 0
+    b2.refresh()
+def clr_dict():
+    data_dict.clear()
+    b2.refresh()
+btn_add_k.clicked.connect(add_kv)
+btn_clr_d.clicked.connect(clr_dict)
+
+# ====== 3. callable + refresh ===========================================
+counter = [5]
+row3 = QHBoxLayout()
+row3.addWidget(QLabel("callable"))
+btn_inc = QPushButton("+1")
+btn_dec = QPushButton("-1")
+row3.addWidget(btn_inc)
+row3.addWidget(btn_dec)
+row3.addStretch()
+v.addLayout(row3)
+
+b3 = Badge(target=btn_inc, color="#fb8c00").bind(lambda: counter[0])
+
+def inc():
+    counter[0] += 1
+    b3.refresh()
+def dec():
+    counter[0] = max(0, counter[0] - 1)
+    b3.refresh()
+btn_inc.clicked.connect(inc)
+btn_dec.clicked.connect(dec)
+
+# ====== 4. model (non-QWidget, signal-based) ============================
+row4 = QHBoxLayout()
+row4.addWidget(QLabel("QStandardItemModel"))
+btn_add_row = QPushButton("插入行")
+btn_rm_row = QPushButton("删除末行")
+row4.addWidget(btn_add_row)
+row4.addWidget(btn_rm_row)
+row4.addStretch()
+v.addLayout(row4)
+
+model = QStandardItemModel(3, 1)
+b4 = Badge(target=btn_add_row, color="#8e24aa").bind(model)
+
+btn_add_row.clicked.connect(lambda: (model.insertRow(model.rowCount()), None))
+btn_rm_row.clicked.connect(lambda: (model.removeRow(model.rowCount() - 1)
+                                     if model.rowCount() > 0 else None))
+
+# ====== 5. QAbstractItemModel (MyTable, auto-track) =====================
+v.addWidget(QLabel("MyTable (auto-track)"))
 top = QHBoxLayout()
 btn_del = QPushButton("删除选中行")
 top.addWidget(btn_del)
 top.addStretch()
 v.addLayout(top)
 
-# ---- table ----------------------------------------------------------------
 HEADERS = ["", "姓名", "部门", "城市", "年龄", "操作"]
 ROWS = [
     [False, "张伟",  "研发部", "北京", 28, ""],
@@ -57,9 +146,7 @@ table.setColumnWidth(ACTION_COL, 90)
 
 v.addWidget(table, 1)
 
-# ---- badge bound to model — auto-tracks rowCount ---------------------------
 Badge(target=btn_del, color="#ea4335").bind(table.sourceModel())
-
 btn_del.clicked.connect(lambda: table.delete_selected_rows())
 
 w.show()
