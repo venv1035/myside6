@@ -3,11 +3,9 @@ Badge + MyTable 联动演示
 ========================
 运行 ``uv run python test_badge.py`` 弹出窗口。
 
-表格 10 行，右上角按钮的 Badge 永远显示当前行数。
-删除行 → Badge 自动减一。
+表格 10 行，Badge 通过 ``.bind(model)`` 自动追踪行数。
 """
 import sys
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QPushButton, QVBoxLayout, QWidget,
 )
@@ -17,19 +15,17 @@ app = QApplication(sys.argv)
 app.setStyle("Fusion")
 
 w = QWidget()
-w.setWindowTitle("Badge + MyTable 联动")
+w.setWindowTitle("Badge bind() 演示")
 w.resize(700, 400)
 
 v = QVBoxLayout(w)
 
-# ---- top bar: delete button + badge -----------------------------------
+# ---- top bar ---------------------------------------------------------------
 top = QHBoxLayout()
 btn_del = QPushButton("删除选中行")
 top.addWidget(btn_del)
 top.addStretch()
 v.addLayout(top)
-
-badge = Badge(target=btn_del, color="#ea4335")
 
 # ---- table ----------------------------------------------------------------
 HEADERS = ["", "姓名", "部门", "城市", "年龄", "操作"]
@@ -47,12 +43,11 @@ ROWS = [
 ]
 ACTION_COL = 5
 CHECK_COL = 0
-EDITABLE_COLS = [1, 2, 3, 4]
 
 table = MyTable(skip_filter_columns=[ACTION_COL])
 table.set_data(HEADERS, ROWS)
 table.set_checkable_rows(True, CHECK_COL)
-table.set_editable_columns(EDITABLE_COLS)
+table.set_editable_columns([1, 2, 3, 4])
 table.set_column_numeric(4, True)
 
 del_delegate = ActionDelegate("删除", parent=table)
@@ -62,15 +57,9 @@ table.setColumnWidth(ACTION_COL, 90)
 
 v.addWidget(table, 1)
 
-# ---- sync badge with row count --------------------------------------------
-def update_badge():
-    src = table.sourceModel()
-    badge.set_count(src.rowCount() if src is not None else 0)
+# ---- badge bound to model — auto-tracks rowCount ---------------------------
+Badge(target=btn_del, color="#ea4335").bind(table.sourceModel())
 
-table.rowsDeleted.connect(update_badge)
-update_badge()
-
-# ---- button action ---------------------------------------------------------
 btn_del.clicked.connect(lambda: table.delete_selected_rows())
 
 w.show()

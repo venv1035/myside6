@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtCore import QAbstractItemModel, QEvent, QPoint, Qt
+from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import QWidget
 
 
@@ -19,8 +19,15 @@ class Badge(QWidget):
         badge = Badge(target=button, color="#ea4335")
         badge.set_count(5)
 
-        # Bind to a signal for live updates
-        some_signal.connect(badge.set_count)
+        # Bind to a model — auto-tracks rowCount changes
+        badge.bind(table.sourceModel())
+
+        # Bind to any sized object (static)
+        badge.bind(my_list)
+        badge.bind("chars")
+
+        # Chained in constructor
+        Badge(target=btn).bind(model)
     """
 
     def __init__(self, target: QWidget | None = None,
@@ -38,6 +45,7 @@ class Badge(QWidget):
         self._current_diameter = min_size
         self._color = QColor(color)
         self._text_color = QColor(text_color)
+        self._source = None
 
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setVisible(False)
@@ -71,7 +79,58 @@ class Badge(QWidget):
         self._reposition()
         self.update()
 
+    def bind(self, source) -> Badge:
+        """Bind the badge count to *source*. Returns ``self`` for chaining.
+
+        ====================  ============================================
+        ``source`` type       Behaviour
+        ====================  ============================================
+        ``QAbstractItemModel`` Auto-track ``rowCount()`` via ``rowsInserted`` /
+                               ``rowsRemoved`` / ``modelReset`` signals.
+        ``list``, ``str`` …   Static ``len(source)`` (no auto-update).
+        ``callable``          ``source()`` is called each sync.
+        ====================  ============================================
+        """
+        self._unbind()
+        self._source = source
+        if isinstance(source, QAbstractItemModel):
+            source.rowsInserted.connect(self._sync)
+            source.rowsRemoved.connect(self._sync)
+            source.modelReset.connect(self._sync)
+        self._sync()
+        return self
+
     # ---- internal ---------------------------------------------------------
+
+    def _unbind(self) -> None:
+        src = self._source
+        if isinstance(src, QAbstractItemModel):
+            try:
+                src.rowsInserted.disconnect(self._sync)
+            except RuntimeError:
+                pass
+            try:
+                src.rowsRemoved.disconnect(self._sync)
+            except RuntimeError:
+                pass
+            try:
+                src.modelReset.disconnect(self._sync)
+            except RuntimeError:
+                pass
+        self._source = None
+
+    def _sync(self) -> None:
+        src = self._source
+        if src is None:
+            return
+        if isinstance(src, QAbstractItemModel):
+            self.set_count(src.rowCount())
+        elif callable(src):
+            self.set_count(src())
+        elif hasattr(src, "__len__"):
+            self.set_count(len(src))
+        else:
+            self.set_count(0)
 
     @staticmethod
     def _find_window(w: QWidget | None) -> QWidget | None:
