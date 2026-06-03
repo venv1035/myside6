@@ -111,15 +111,17 @@ class _FlowLayout(QLayout):
 
         for it in self._items:
             w = it.widget()
-            if w and not w.isVisible():
+            if w is None:
                 continue
             hint = it.sizeHint()
+            if not hint.isValid() or hint.width() <= 0:
+                continue
             if x + hint.width() > right and x > rect.x() + m.left():
                 x = rect.x() + m.left()
                 y += row_h + gap
                 row_h = 0
             if set_geo:
-                it.setGeometry(QRect(QPoint(x, y), hint))
+                w.setGeometry(QRect(QPoint(x, y), hint))
             x += hint.width() + gap
             row_h = max(row_h, hint.height())
 
@@ -222,6 +224,10 @@ class _DragItem(QWidget):
         self.setCursor(Qt.OpenHandCursor)
         self.setMouseTracking(True)
         self.setToolTip(text)
+        self._drag_start: QPoint | None = None
+
+    def sizeHint(self):
+        return QSize(64, 64)
 
     @property
     def name(self):
@@ -276,11 +282,15 @@ class _DragItem(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
+        if event.buttons() & Qt.LeftButton and self._drag_start is not None:
             d = _manhattan_dist(event.position().toPoint(), self._drag_start)
             if d > QApplication.startDragDistance():
                 self.dragRequested.emit(self._name)
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start = None
+        super().mouseReleaseEvent(event)
 
     def enterEvent(self, event):
         self._hovered = True
@@ -575,14 +585,15 @@ class DragBar(QWidget):
             idx = self._flow.indexOf(w)
             if idx >= 0:
                 self._flow.takeAt(idx)
-                w.setParent(self._flow_widget)
         for n in self._names:
             self._flow.addWidget(self._widgets[n])
         tidx = self._flow.indexOf(self._trash)
         if tidx >= 0:
             self._flow.takeAt(tidx)
         self._flow.addWidget(self._trash)
-        self._flow_widget.updateGeometry()
+        self._flow_widget.update()
+        self._flow.invalidate()
+        self._flow.activate()
 
     # ── trash ───────────────────────────────────────────────────────────
 
@@ -614,7 +625,7 @@ class DragBar(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton and hasattr(self, "_rubber_origin"):
+        if event.buttons() & Qt.LeftButton and self._rubber_origin is not None:
             d = _manhattan_dist(event.position().toPoint(), self._rubber_origin)
             if d > QApplication.startDragDistance():
                 origin_flow = self._flow_widget.mapFrom(self, self._rubber_origin)
@@ -633,6 +644,7 @@ class DragBar(QWidget):
                 self._update_selection()
                 self.selection_changed.emit(list(self._selected))
             self._rubber_rect = None
+            self._rubber_origin = None
             self._flow_widget.update()
             event.accept()
             return
