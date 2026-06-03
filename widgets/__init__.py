@@ -1,3 +1,4 @@
+from .badge import Badge
 from .my_table import MyTable, ActionDelegate, ACTION_STYLES
 from .my_combo import (
     MyCombo,
@@ -9,6 +10,7 @@ from .my_combo import (
 )
 
 __all__ = [
+    "Badge",
     "MyTable",
     "ActionDelegate",
     "ACTION_STYLES",
