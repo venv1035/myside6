@@ -1,29 +1,35 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QRect, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 
 class Badge(QWidget):
     """A small coloured circle with a number, attached to the top-right corner
-    of a parent widget (typically a ``QPushButton`` or ``QToolButton``).
+    of a target widget (typically a ``QPushButton`` or ``QToolButton``).
+
+    The badge is **not** parented to the target — it is parented to the nearest
+    top-level window so it is never clipped by the target's bounds.
 
     Usage::
 
-        badge = Badge(parent=button, color="#ea4335")
+        badge = Badge(target=button, color="#ea4335")
         badge.set_count(5)
 
         # Bind to a signal for live updates
         some_signal.connect(badge.set_count)
     """
 
-    def __init__(self, parent: QWidget | None = None,
+    def __init__(self, target: QWidget | None = None,
                  *, color: str = "#ea4335",
                  text_color: str = "#ffffff",
                  max_count: int = 99,
                  size: int = 20) -> None:
-        super().__init__(parent)
+        # Parent to the top-level window so we aren't clipped.
+        win = self._find_window(target)
+        super().__init__(win)
+        self._target = target
         self._count = 0
         self._max_count = max_count
         self._size = size
@@ -33,8 +39,8 @@ class Badge(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setVisible(False)
 
-        if parent is not None:
-            parent.installEventFilter(self)
+        if target is not None:
+            target.installEventFilter(self)
 
     # ---- public API -------------------------------------------------------
 
@@ -61,18 +67,27 @@ class Badge(QWidget):
 
     # ---- internal ---------------------------------------------------------
 
+    @staticmethod
+    def _find_window(w: QWidget | None) -> QWidget | None:
+        if w is None:
+            return None
+        while w.parentWidget() is not None:
+            w = w.parentWidget()
+        return w
+
     def _reposition(self) -> None:
-        p = self.parent()
-        if p is None:
+        t = self._target
+        p = self.parentWidget()
+        if t is None or p is None:
             return
-        pr = p.rect()
-        cx = pr.right()
-        cy = pr.top()
+        # top-right corner of target in this badge's parent coordinates
+        tr = t.mapTo(p, QPoint(t.width(), 0))
         s = self._size
-        self.setGeometry(cx - s // 2, cy - s // 2, s, s)
+        self.setGeometry(tr.x() - s // 2, tr.y() - s // 2, s, s)
+        self.raise_()
 
     def eventFilter(self, obj: QWidget, event: QEvent) -> bool:
-        if obj is self.parent() and event.type() == QEvent.Resize:
+        if obj is self._target and event.type() in (QEvent.Resize, QEvent.Move):
             self._reposition()
         return super().eventFilter(obj, event)
 

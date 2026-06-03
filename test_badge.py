@@ -20,18 +20,18 @@ btn = QPushButton("消息")
 btn.resize(100, 36)
 v.addWidget(btn)
 
-badge = Badge(parent=btn)
+badge = Badge(target=btn)
 badge.set_count(3)
 badge.set_color("#1a73e8")
 
 btn2 = QPushButton("告警")
 v.addWidget(btn2)
-badge2 = Badge(parent=btn2, color="#ea4335")
+badge2 = Badge(target=btn2, color="#ea4335")
 badge2.set_count(12)
 
 btn3 = QPushButton("已完成")
 v.addWidget(btn3)
-badge3 = Badge(parent=btn3, color="#43a047")
+badge3 = Badge(target=btn3, color="#43a047")
 badge3.set_count(99)
 
 counter = 0
