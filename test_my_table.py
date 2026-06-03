@@ -36,7 +36,7 @@ t.set_editable_columns(EDITABLE_COLS)
 t.set_column_numeric(4, True)
 
 d = ActionDelegate("删除", parent=t)
-d.clicked.connect(lambda src_row: print(f"删除行 {src_row}"))
+d.clicked.connect(lambda src_row: t.delete_rows([src_row]))
 t.setItemDelegateForColumn(ACTION_COL, d)
 t.setColumnWidth(ACTION_COL, 90)
 

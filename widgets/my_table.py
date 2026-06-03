@@ -1218,8 +1218,15 @@ class MyTable(QTableView):
         if index.column() == self._check_column:
             return
         proxy = index.model()
-        source_model = proxy.sourceModel() if isinstance(proxy, QSortFilterProxyModel) else proxy
-        src_row = proxy.mapToSource(index).row() if isinstance(proxy, QSortFilterProxyModel) else index.row()
+        if not isinstance(proxy, QSortFilterProxyModel):
+            return
+        source_model = proxy.sourceModel()
+        if source_model is None:
+            return
+        src_idx = proxy.mapToSource(index)
+        if not src_idx.isValid():
+            return
+        src_row = src_idx.row()
         item = source_model.item(src_row, self._check_column)
         if item is not None and (item.flags() & Qt.ItemIsUserCheckable):
             new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
