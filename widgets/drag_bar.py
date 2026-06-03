@@ -742,7 +742,13 @@ class DragBar(QWidget):
 
         action = drag.exec(Qt.MoveAction | Qt.CopyAction)
         if action == Qt.MoveAction and self._drag_data is None:
-            pass
+            for n in list(names):
+                if n in self._widgets:
+                    self.remove_item(n)
+                    self.item_removed.emit(n)
+            self._selected &= set(self._widgets.keys())
+            self._update_selection()
+            self.selection_changed.emit(list(self._selected))
 
     # ── drop target (via _DropContainer) ────────────────────────────────
 
