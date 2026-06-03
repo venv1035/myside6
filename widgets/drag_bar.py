@@ -536,12 +536,11 @@ class DragBar(QWidget):
         bg = self._style.get("background", "transparent")
         border = self._style.get("border", "none")
         radius = self._style.get("border_radius", 0)
+
         self.setStyleSheet(f"""
-            DragBar {{
-                background: {bg};
-                border: {border};
-                border-radius: {radius}px;
-            }}
+            background: {bg};
+            border: {border};
+            border-radius: {radius}px;
         """)
 
     # ── public API ──────────────────────────────────────────────────────
