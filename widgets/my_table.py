@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QStyle,
+    QStyleOptionButton,
     QStyleOptionHeader,
     QStyledItemDelegate,
     QTableView,
@@ -788,6 +789,7 @@ class _FilterHeaderView(QHeaderView):
     """
 
     filterClicked = Signal(int, QPoint)
+    checkAllClicked = Signal(int)  # emitted when the 全选 header checkbox is clicked
 
     # geometry constants for the right-side icon area
     FILTER_SIZE = 16
@@ -814,6 +816,8 @@ class _FilterHeaderView(QHeaderView):
         self._sort_neutral = _sort_icon(False, False)
         self._sort_asc = _sort_icon(up_active=True)
         self._sort_desc = _sort_icon(down_active=True)
+        self._check_column = -1       # column index for the 全选 header checkbox
+        self._all_checked = False     # visual state of the header checkbox
         self.setMinimumSectionSize(80)
         self.setDefaultSectionSize(140)
 
@@ -831,6 +835,20 @@ class _FilterHeaderView(QHeaderView):
         else:
             self._skip_filter_columns.discard(column)
         self.viewport().update()
+
+    def set_check_column(self, column: int) -> None:
+        """Designate ``column`` as the row-checkbox column (draws 全选 in header)."""
+        self._check_column = column
+        self.viewport().update()
+
+    def set_all_checked(self, checked: bool) -> None:
+        """Update the visual state of the 全选 header checkbox."""
+        self._all_checked = checked
+        self.viewport().update()
+
+    @property
+    def check_column(self) -> int:
+        return self._check_column
 
     # ---- geometry helpers ------------------------------------------------
     def _filter_rect(self, logical_index: int) -> QRect:
@@ -862,6 +880,20 @@ class _FilterHeaderView(QHeaderView):
         painter.save()
         super().paintSection(painter, rect, logical_index)
         painter.restore()
+
+        # ---- 全选 checkbox for the check column --------------------------
+        if logical_index == self._check_column:
+            cb_opt = QStyleOptionButton()
+            cb_sz = 18
+            cb_x = rect.x() + (rect.width() - cb_sz) // 2
+            cb_y = rect.y() + (rect.height() - cb_sz) // 2
+            cb_opt.rect = QRect(cb_x, cb_y, cb_sz, cb_sz)
+            cb_opt.state = QStyle.State_Enabled
+            if self._all_checked:
+                cb_opt.state |= QStyle.State_On
+            else:
+                cb_opt.state |= QStyle.State_Off
+            self.style().drawPrimitive(QStyle.PE_IndicatorCheckBox, cb_opt, painter)
 
         sort_col = self.sortIndicatorSection()
         sort_order = self.sortIndicatorOrder()
@@ -918,8 +950,12 @@ class _FilterHeaderView(QHeaderView):
         if event.button() == Qt.LeftButton:
             section = self.logicalIndexAt(event.position().toPoint())
             if section >= 0 and section not in self._skip_filter_columns:
+                # 全选 header checkbox click
+                if section == self._check_column:
+                    self.checkAllClicked.emit(section)
+                    event.accept()
+                    return
                 icon_rect = self._icon_rect(section)
-                # Only react to the icon click if the icon is currently visible.
                 visible = (section in self._active_columns
                            or section == self._hover_section)
                 if visible and icon_rect.contains(event.position().toPoint()):
@@ -952,6 +988,7 @@ class MyTable(QTableView):
         self._header = _FilterHeaderView(Qt.Horizontal, self)
         self.setHorizontalHeader(self._header)
         self._header.filterClicked.connect(self._show_filter_menu)
+        self._header.checkAllClicked.connect(self._on_header_check_all)
 
         self.setSortingEnabled(True)
         self.setAlternatingRowColors(True)
@@ -1163,8 +1200,13 @@ class MyTable(QTableView):
     # checkable rows
     # ------------------------------------------------------------------
     def _on_row_clicked(self, index: QModelIndex) -> None:
-        """Auto-toggle checkbox for the clicked row (when checkable rows enabled)."""
+        """Auto-toggle checkbox for the clicked row (when checkable rows enabled).
+        Skipped when clicking directly on the checkbox column — the default
+        delegate already handles the toggle there; toggling again would cancel it.
+        """
         if not self._checkable_rows:
+            return
+        if index.column() == self._check_column:
             return
         proxy = index.model()
         source_model = proxy.sourceModel() if isinstance(proxy, QSortFilterProxyModel) else proxy
@@ -1174,6 +1216,28 @@ class MyTable(QTableView):
             new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
             item.setCheckState(new_state)
 
+    def _on_header_check_all(self, column: int) -> None:
+        """Toggle all row checkboxes (全选 / 取消全选)."""
+        if not self._checkable_rows or column != self._check_column:
+            return
+        source = self._proxy.sourceModel()
+        if source is None:
+            return
+        n = source.rowCount()
+        if n == 0:
+            return
+        all_checked = all(
+            source.item(r, self._check_column).checkState() == Qt.Checked
+            for r in range(n)
+            if source.item(r, self._check_column) is not None
+        )
+        new_state = Qt.Unchecked if all_checked else Qt.Checked
+        for r in range(n):
+            item = source.item(r, self._check_column)
+            if item is not None and (item.flags() & Qt.ItemIsUserCheckable):
+                item.setCheckState(new_state)
+        self._sync_header_check_state()
+
     def set_checkable_rows(self, enabled: bool, column: int = 0) -> None:
         """Show a checkbox in ``column`` of every row.
 
@@ -1181,12 +1245,16 @@ class MyTable(QTableView):
         """
         self._checkable_rows = enabled
         self._check_column = column
+        self._header.set_check_column(column if enabled else -1)
+        self._header.set_all_checked(False)
         if enabled:
             self._header.set_filter_skipped(column, True)
             self.setColumnWidth(column, 36)
         else:
             self._header.set_filter_skipped(column, False)
         self._apply_flags_to_all()
+        if enabled:
+            self._sync_header_check_state()
 
     def checked_rows(self) -> list[int]:
         """Return *source* row indices whose checkbox is currently checked."""
@@ -1289,9 +1357,26 @@ class MyTable(QTableView):
         if (self._checkable_rows and item.column() == self._check_column):
             checked = item.checkState() == Qt.Checked
             self.rowChecked.emit(item.row(), checked)
+            self._sync_header_check_state()
             return
         if self._column_is_editable(item.column()):
             self.cellEdited.emit(item.row(), item.column(), item.data(Qt.EditRole))
+
+    def _sync_header_check_state(self) -> None:
+        """Synchronise the 全选 header checkbox with the current row state."""
+        source = self._proxy.sourceModel()
+        if source is None or not self._checkable_rows:
+            return
+        n = source.rowCount()
+        if n == 0:
+            self._header.set_all_checked(False)
+            return
+        all_checked = all(
+            source.item(r, self._check_column).checkState() == Qt.Checked
+            for r in range(n)
+            if source.item(r, self._check_column) is not None
+        )
+        self._header.set_all_checked(all_checked)
 
     # ------------------------------------------------------------------
     # row deletion
