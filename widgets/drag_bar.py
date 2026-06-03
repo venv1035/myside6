@@ -752,9 +752,20 @@ class DragBar(QWidget):
 
     # ── drop target (via _DropContainer) ────────────────────────────────
 
+    def _has_name_conflict(self, data: dict) -> bool:
+        if data.get("source_id") == id(self):
+            return False
+        for it in data.get("items", []):
+            if it["name"] in self._widgets:
+                return True
+        return False
+
     def _on_drag_enter(self, event):
         data = _parse_mime(event)
         if data is None:
+            event.ignore()
+            return
+        if self._has_name_conflict(data):
             event.ignore()
             return
         self._drag_data = data
@@ -764,6 +775,9 @@ class DragBar(QWidget):
     def _on_drag_move(self, event):
         data = _parse_mime(event)
         if data is None:
+            event.ignore()
+            return
+        if self._has_name_conflict(data):
             event.ignore()
             return
         event.setDropAction(Qt.MoveAction)
@@ -811,10 +825,12 @@ class DragBar(QWidget):
                 self.item_moved.emit(n, self._names.index(n))
             self.selection_changed.emit(list(self._selected))
         else:
+            if self._has_name_conflict(data):
+                self._drag_data = None
+                event.ignore()
+                return
             for it_data in items_data:
                 n = it_data["name"]
-                if n in self._widgets:
-                    n = self._unique_name(n)
                 self.add_item(n, it_data["text"], it_data.get("icon") or None)
                 names = self._names
                 idx = min(idx, len(names))
