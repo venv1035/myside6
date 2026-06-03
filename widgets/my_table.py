@@ -294,7 +294,6 @@ class _FilterPopup(QFrame):
 
     filterChanged = Signal(int, object)            # column, set or None
     numericFilterChanged = Signal(int, object)     # column, list[(op, value)] or None
-    sortRequested = Signal(int, Qt.SortOrder)
 
     def __init__(self, column: int, values: Iterable[str],
                  selected: set[str] | None,
@@ -441,8 +440,8 @@ class _FilterPopup(QFrame):
         self._search.textChanged.connect(self._populate_list)
         self._select_all.clicked.connect(self._on_select_all_clicked)
         self._list.itemChanged.connect(self._on_item_changed)
-        self._sort_asc.clicked.connect(lambda: self._emit_sort(Qt.AscendingOrder))
-        self._sort_desc.clicked.connect(lambda: self._emit_sort(Qt.DescendingOrder))
+        self._sort_asc.clicked.connect(lambda: self._on_popup_sort(Qt.AscendingOrder))
+        self._sort_desc.clicked.connect(lambda: self._on_popup_sort(Qt.DescendingOrder))
         self._clear_btn.clicked.connect(self._on_clear)
         self._ok_btn.clicked.connect(self._on_ok)
         self._cancel_btn.clicked.connect(self.close)
@@ -563,9 +562,39 @@ class _FilterPopup(QFrame):
             else:
                 self._selected.discard(value)
 
-    def _emit_sort(self, order: Qt.SortOrder) -> None:
-        self.sortRequested.emit(self._column, order)
-        self.close()
+    def _on_popup_sort(self, order: Qt.SortOrder) -> None:
+        # Sort the *visible* items in the popup (not the main table).
+        # The main table's column sort lives on the header arrows; the
+        # popup's 升序/降序 are an internal convenience for finding
+        # values in long lists. Empty strings ("(空白)") are always pinned
+        # to the end so they don't break a-z/ z-a order.
+        n = self._list.count()
+        if n <= 1:
+            return
+        items: list[dict] = []
+        for i in range(n):
+            it = self._list.item(i)
+            items.append({
+                "display": it.text(),
+                "value": it.data(Qt.UserRole),
+                "checked": it.checkState() == Qt.Checked,
+            })
+        reverse = (order == Qt.DescendingOrder)
+        empties = [x for x in items if x["display"] == "(空白)"]
+        non_empty = [x for x in items if x["display"] != "(空白)"]
+        non_empty.sort(key=lambda x: x["display"].lower(), reverse=reverse)
+        items = non_empty + empties  # "(空白)" always at end
+
+        self._list.blockSignals(True)
+        self._list.clear()
+        for it in items:
+            li = QListWidgetItem(it["display"])
+            li.setFlags(li.flags() | Qt.ItemIsUserCheckable)
+            li.setCheckState(Qt.Checked if it["checked"] else Qt.Unchecked)
+            li.setData(Qt.UserRole, it["value"])
+            self._list.addItem(li)
+        self._list.blockSignals(False)
+        self._update_select_all_state()
 
     def _on_clear(self) -> None:
         # Clearing wipes both text and numeric filters.
@@ -971,7 +1000,9 @@ class MyTable(QTableView):
         )
         popup.filterChanged.connect(self._on_filter_changed)
         popup.numericFilterChanged.connect(self._on_numeric_filter_changed)
-        popup.sortRequested.connect(self._on_sort_requested)
+        # The popup's 升序/降序 buttons sort the popup's *own* list, not the
+        # main table — the main table's column sort is driven by the header
+        # arrows (see ``_FilterHeaderView`` and ``_on_header_sort_indicator``).
         popup.show_at(global_pos)
 
     def _on_filter_changed(self, column: int, allowed: set[str] | None) -> None:
@@ -988,9 +1019,6 @@ class MyTable(QTableView):
         has_text = self._proxy.column_filter(column) is not None
         has_num = bool(conditions)
         self._header.set_active(column, has_text or has_num)
-
-    def _on_sort_requested(self, column: int, order: Qt.SortOrder) -> None:
-        self.sortByColumn(column, order)
 
     # ------------------------------------------------------------------
     # checkable rows

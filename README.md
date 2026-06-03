@@ -476,6 +476,38 @@ state = Qt.Unchecked if all_checked else Qt.Checked
 
 这样无论 Qt 怎么改 QCheckBox 自己的 state，都以 list 数据为准。复测 `QTest.mouseClick` × 3 + 4 个场景（空/prior/partial/search）全部 PASS。
 
+**三次修复 — 弹窗内「升序/降序」原本是关面板 + 对主表格排序**：
+
+旧实现：弹窗的「↑ 升序」「↓ 降序」按钮调 `_emit_sort(order)`，emit `sortRequested(col, order)` 信号 → `MyTable._on_sort_requested` 调 `self.sortByColumn(col, order)` → **关掉弹窗、对主表格排序**。
+
+问题：主表格的列排序**早就有自己的 UI**（表头的双箭头 `_FilterHeaderView`），弹窗里再放一对"全局排序"按钮是冗余且反直觉的——用户预期弹窗内的排序只对**弹窗内可见项**生效，方便在长列表里翻找。
+
+修复：把 `_emit_sort` 改成 `_on_popup_sort`，**只重排弹窗内 `_list` 的 item**：
+```python
+def _on_popup_sort(self, order: Qt.SortOrder) -> None:
+    n = self._list.count()
+    if n <= 1: return  # 空 / 1 项：忽略
+    items = [...]  # 收集 (display, value, checked)
+    reverse = (order == Qt.DescendingOrder)
+    empties = [x for x in items if x["display"] == "(空白)"]
+    non_empty = [x for x in items if x["display"] != "(空白)"]
+    non_empty.sort(key=lambda x: x["display"].lower(), reverse=reverse)
+    items = non_empty + empties  # "(空白)" 始终在末尾
+    # ... 重新写回 _list
+```
+
+同时清理 dead code：
+- 删除 `sortRequested` 信号（外部无消费者）
+- 删除 `MyTable._on_sort_requested` handler 和 `popup.sortRequested.connect(...)`
+
+排序规则：
+- 按 `display.lower()` 字典序（中文按 Unicode 码点，英文大小写不敏感）
+- **"(空白)" 永远在末尾**，升降都不会跟其他项混淆
+- **不关弹窗**——用户可以连续点升降对比
+- **不影响主表格列排序**——主表格用表头双箭头
+
+`QTest.mouseClick` × 7 场景 PASS：基础升降、空列表、1 项、含 "(空白)"、check 状态保留、MyTable 集成（主表格 `sortByColumn` 0 次调用）。
+
 ### 5.10 数字列需要"按数字比较"开关
 
 **现象**：工资 / 年龄这种数字列，列表里有 30, 35, 41... 多选时只能 `set = {30, 35}` 这种枚举式筛选，要找"年龄 > 30 的所有员工"做不了。
