@@ -455,16 +455,6 @@ class _MultiSelectPopup(QFrame):
                 for i in range(self._list.count())
                 if self._list.item(i).checkState() == Qt.Checked]
 
-    def enterEvent(self, event) -> None:
-        if self._owner is not None:
-            self._owner._on_popup_hover_enter()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        if self._owner is not None:
-            self._owner._on_popup_hover_leave()
-        super().leaveEvent(event)
-
     def hideEvent(self, event) -> None:
         # If the popup is closing without "确定" (e.g. outside-click, Esc,
         # hover-leave timer), restore the snapshot so buffered changes are
@@ -812,17 +802,6 @@ class MyCombo(QWidget):
         # Global click-outside watcher -- attached only while popup is open.
         self._outside_filter = _OutsideClickFilter(self, self._on_outside_click)
 
-        # Hover-to-close: when the user moves the mouse OUT of both the popup
-        # AND the main line-edit, the popup closes itself after a short delay.
-        # Keyboard users that open the popup from afar never trigger
-        # leaveEvent on the main widget (cursor never entered it), so the
-        # popup stays open until they click outside or press Esc.
-        self._leave_close_timer = QTimer(self)
-        self._leave_close_timer.setSingleShot(True)
-        self._leave_close_timer.setInterval(220)
-        self._leave_close_timer.timeout.connect(self._check_close_on_hover_leave)
-        self.setMouseTracking(True)
-
     # ---- public API ------------------------------------------------------
     def line_edit(self) -> QLineEdit:
         """Expose the underlying QLineEdit (e.g. for validators)."""
@@ -1127,7 +1106,6 @@ class MyCombo(QWidget):
         if self._popup_open:
             return
         self._popup_open = True
-        self._leave_close_timer.stop()
         # Re-apply the search_in_popup switch each time the popup opens --
         # this lets :py:meth:`set_search_in_popup` take effect immediately
         # even after the popup widget has already been built.
@@ -1166,7 +1144,6 @@ class MyCombo(QWidget):
         if not self._popup_open:
             return
         self._popup_open = False
-        self._leave_close_timer.stop()
         self._popup.hide()
         try:
             QApplication.instance().removeEventFilter(self._outside_filter)
@@ -1183,41 +1160,6 @@ class MyCombo(QWidget):
             self._render_selection_to_edit()
         self.popupHidden.emit()
         self.update()
-
-    # ---- hover-to-close --------------------------------------------------
-    def _on_popup_hover_enter(self) -> None:
-        """Called from the popup's enterEvent -- cancels any pending close."""
-        if not self._popup_open:
-            return
-        self._leave_close_timer.stop()
-
-    def _on_popup_hover_leave(self) -> None:
-        """Called from the popup's leaveEvent -- arms the close timer."""
-        if not self._popup_open:
-            return
-        self._leave_close_timer.start()
-
-    def enterEvent(self, event) -> None:    # main combo box
-        if self._popup_open:
-            self._leave_close_timer.stop()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:    # main combo box
-        if self._popup_open:
-            self._leave_close_timer.start()
-        super().leaveEvent(event)
-
-    def _check_close_on_hover_leave(self) -> None:
-        """Close the popup only if the cursor is now outside BOTH regions."""
-        if not self._popup_open:
-            return
-        pos = QCursor.pos()
-        w = QApplication.widgetAt(pos)
-        while w is not None:
-            if w is self._popup or w is self:
-                return
-            w = w.parentWidget()
-        self.hide_popup()
 
     def _toggle_popup(self) -> None:
         if self._popup_open:

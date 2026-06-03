@@ -11,7 +11,6 @@ from PySide6.QtCore import (
     QSortFilterProxyModel,
     Qt,
     Signal,
-    QTimer,
 )
 from PySide6.QtGui import (
     QAction,
@@ -322,12 +321,6 @@ class _FilterPopup(QFrame):
         # Numeric-mode state.
         self._numeric_mode = numeric
         self._condition_rows: list[_NumericConditionRow] = []
-
-        # Hover-leave auto-close timer (220ms, like MyCombo).
-        self._leave_close_timer = QTimer(self)
-        self._leave_close_timer.setSingleShot(True)
-        self._leave_close_timer.setInterval(220)
-        self._leave_close_timer.timeout.connect(self._check_close_on_hover_leave)
 
         self.setStyleSheet(
             """
@@ -756,27 +749,6 @@ class _FilterPopup(QFrame):
             self._hover_only_btn.hide()
             self._hover_only_target = None
         return super().eventFilter(watched, event)
-
-    # ---- hover-leave auto-close (mirrors MyCombo) -----------------------
-    def enterEvent(self, event) -> None:
-        self._leave_close_timer.stop()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self._leave_close_timer.start()
-        super().leaveEvent(event)
-
-    def _check_close_on_hover_leave(self) -> None:
-        """Close the popup if the cursor is not over any of its children."""
-        from PySide6.QtGui import QCursor
-        from PySide6.QtWidgets import QApplication
-        pos = QCursor.pos()
-        w = QApplication.widgetAt(pos)
-        while w is not None:
-            if w is self:
-                return
-            w = w.parentWidget()
-        self.close()
 
 
 class _FilterHeaderView(QHeaderView):
