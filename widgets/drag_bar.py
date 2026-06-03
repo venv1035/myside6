@@ -72,9 +72,10 @@ class DragBarItem:
 # ── FlowLayout ──────────────────────────────────────────────────────────
 
 class _FlowLayout(QLayout):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, vertical: bool = False):
         super().__init__(parent)
         self._items: list[QLayoutItem] = []
+        self._vertical = vertical
 
     def addItem(self, item):
         self._items.append(item)
@@ -103,7 +104,7 @@ class _FlowLayout(QLayout):
         return Qt.Orientations()
 
     def hasHeightForWidth(self):
-        return True
+        return not self._vertical
 
     def heightForWidth(self, w):
         return self._layout(QRect(0, 0, w, 0), False)
@@ -113,10 +114,18 @@ class _FlowLayout(QLayout):
         self._layout(rect, True)
 
     def sizeHint(self):
+        m = self.contentsMargins()
+        if self._vertical:
+            h = m.top() + m.bottom()
+            gap = self.spacing()
+            for it in self._items:
+                sh = it.sizeHint()
+                if sh.isValid() and sh.height() > 0:
+                    h += sh.height() + gap
+            return QSize(200, h)
         s = QSize()
         for it in self._items:
             s = s.expandedTo(it.minimumSize())
-        m = self.contentsMargins()
         return QSize(200, s.height() + m.top() + m.bottom())
 
     def minimumSize(self):
@@ -128,6 +137,11 @@ class _FlowLayout(QLayout):
                      s.height() + m.top() + m.bottom())
 
     def _layout(self, rect, set_geo):
+        if self._vertical:
+            return self._layout_vertical(rect, set_geo)
+        return self._layout_horizontal(rect, set_geo)
+
+    def _layout_horizontal(self, rect, set_geo):
         m = self.contentsMargins()
         x = rect.x() + m.left()
         y = rect.y() + m.top()
@@ -152,6 +166,32 @@ class _FlowLayout(QLayout):
             row_h = max(row_h, hint.height())
 
         return y + row_h - rect.y() + m.bottom()
+
+    def _layout_vertical(self, rect, set_geo):
+        m = self.contentsMargins()
+        x = rect.x() + m.left()
+        y = rect.y() + m.top()
+        col_w = 0
+        gap = self.spacing()
+        bottom = rect.bottom() - m.bottom()
+
+        for it in self._items:
+            w = it.widget()
+            if w is None:
+                continue
+            hint = it.sizeHint()
+            if not hint.isValid() or hint.height() <= 0:
+                continue
+            if y + hint.height() > bottom and y > rect.y() + m.top():
+                y = rect.y() + m.top()
+                x += col_w + gap
+                col_w = 0
+            if set_geo:
+                w.setGeometry(QRect(QPoint(x, y), hint))
+            y += hint.height() + gap
+            col_w = max(col_w, hint.width())
+
+        return y + gap - rect.y() + m.bottom()
 
 
 # ── Trash zone ──────────────────────────────────────────────────────────
@@ -360,11 +400,12 @@ class DragBar(QWidget):
     """可拖拽图标工具栏。
 
     支持同一 Bar 内拖拽排序、跨 Bar 拖拽、多选、回收站删除、重置初始状态。
+    支持横向（默认）和纵向两种方向。
 
     Parameters
     ----------
     fixed_length : int | None
-        固定宽度，超过则换行。
+        固定宽度（横向）或固定高度（纵向），超过则换行。
     spacing : int
         元素间距。
     style : dict | None
@@ -372,6 +413,8 @@ class DragBar(QWidget):
         ``background``, ``border``, ``border_radius``。
     closable : bool
         是否显示右上角 X 关闭按钮。
+    vertical : bool
+        True 为纵向排列，False 为横向。
 
     Signals
     -------
@@ -394,9 +437,11 @@ class DragBar(QWidget):
 
     def __init__(self, fixed_length: int | None = None, spacing: int = 6,
                  style: dict | None = None, closable: bool = True,
+                 vertical: bool = False,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self._spacing = spacing
+        self._vertical = vertical
         self._items: list[DragBarItem] = []
         self._widgets: dict[str, _DragItem] = {}
         self._selected: set[str] = set()
@@ -411,7 +456,7 @@ class DragBar(QWidget):
 
         # container with flow layout + drop forwarding
         self._flow_widget = _DropContainer(self)
-        self._flow = _FlowLayout(self._flow_widget)
+        self._flow = _FlowLayout(self._flow_widget, vertical=vertical)
         self._flow.setSpacing(spacing)
         self._flow.setContentsMargins(4, 4, 4, 4)
 
@@ -428,8 +473,12 @@ class DragBar(QWidget):
         # scroll area
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        if vertical:
+            self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        else:
+            self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setWidget(self._flow_widget)
 
@@ -455,7 +504,6 @@ class DragBar(QWidget):
                 }
                 QPushButton:hover { color: #333; }
             """)
-            # reparent so button sits on the bar (not transparent to clicks)
             self._close_btn.setParent(self)
             self._close_btn.raise_()
             self._close_btn.clicked.connect(self._on_close)
@@ -464,7 +512,10 @@ class DragBar(QWidget):
         outer.addWidget(self._scroll)
 
         if fixed_length is not None:
-            self.setFixedWidth(fixed_length)
+            if vertical:
+                self.setFixedHeight(fixed_length)
+            else:
+                self.setFixedWidth(fixed_length)
 
         self._apply_style()
 
