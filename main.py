@@ -84,7 +84,7 @@ class DemoWindow(QMainWindow):
         ]:
             col = QVBoxLayout()
             col.addWidget(QLabel(caption))
-            cb = MyCombo(buttons_position=pos)
+            cb = MyCombo()
             cb.set_items(items)
             cb.selectionChanged.connect(self._update_summary)
             setattr(self, attr, cb)

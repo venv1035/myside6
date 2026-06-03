@@ -223,9 +223,9 @@ class _MultiSelectPopup(QFrame):
 
     selectionChanged = Signal(list)   # current list of selected values
     requestClose = Signal()
+    filterOnlyThis = Signal(object)  # emit single value: "filter to only this item"
 
     def __init__(self, parent: QWidget | None = None,
-                 buttons_at_top: bool = True,
                  theme: dict | None = None,
                  search_in_popup: bool = True,
                  string_only: bool = False) -> None:
@@ -239,7 +239,6 @@ class _MultiSelectPopup(QFrame):
         self.setFocusPolicy(Qt.NoFocus)
         self.setFrameShape(QFrame.NoFrame)
         self.setMouseTracking(True)
-        self._buttons_at_top = buttons_at_top
         self._search_in_popup = search_in_popup
         self._string_only = string_only
 
@@ -296,6 +295,17 @@ class _MultiSelectPopup(QFrame):
             QLineEdit#PopupSearch:focus {{
                 border-color: {t['search_border_focus']};
             }}
+            QToolButton#HoverOnly {{
+                background: {t['btn_primary_bg']};
+                color: {t['btn_primary_color']};
+                border: 1px solid {t['btn_primary_border']};
+                border-radius: 10px;
+                padding: 1px 8px;
+                font-size: 11px;
+            }}
+            QToolButton#HoverOnly:hover {{
+                background: {t['btn_primary_hover_bg']};
+            }}
         """)
 
     def _build_widgets(self) -> None:
@@ -311,15 +321,33 @@ class _MultiSelectPopup(QFrame):
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
+        # -- sort row (升序 / 降序) ---------------------------------------
+        sort_row = QHBoxLayout()
+        sort_row.setSpacing(4)
+        self._sort_asc_btn = QPushButton("\u2191 升序", self)
+        self._sort_desc_btn = QPushButton("\u2193 降序", self)
+        sort_row.addWidget(self._sort_asc_btn)
+        sort_row.addWidget(self._sort_desc_btn)
+        sort_row.addStretch(1)
+        outer.addLayout(sort_row)
+
+        # -- 全选 checkbox (tristate, above the list) ----------------------
+        # Mirrors the MyTable filter-popup layout where the "全选" widget
+        # is a QCheckBox (not a button) placed between the sort row and
+        # the search box.  Its tristate visual (Unchecked / Partially
+        # Checked / Checked) gives the user immediate feedback on the
+        # current selection state.
+        self._select_all_cb = QCheckBox("全选", self)
+        self._select_all_cb.setTristate(True)
+        outer.addWidget(self._select_all_cb)
+
+        # -- bottom button row (反选 / 重置     已选 N 项) -----------------
         self._btn_row_widget = QWidget(self)
         btn_row = QHBoxLayout(self._btn_row_widget)
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(4)
-        self._select_all_btn = QPushButton("全选", self._btn_row_widget)
-        self._select_all_btn.setObjectName("primary")
         self._invert_btn = QPushButton("反选", self._btn_row_widget)
         self._clear_btn = QPushButton("重置", self._btn_row_widget)
-        btn_row.addWidget(self._select_all_btn)
         btn_row.addWidget(self._invert_btn)
         btn_row.addWidget(self._clear_btn)
         btn_row.addStretch(1)
@@ -352,14 +380,10 @@ class _MultiSelectPopup(QFrame):
         self._list.setUniformItemSizes(True)
         self._list.setMouseTracking(True)
 
-        if self._buttons_at_top:
-            outer.addWidget(self._btn_row_widget)
-            outer.addWidget(self._search_edit)        # search is always in
-            outer.addWidget(self._list)               # the middle slot
-        else:
-            outer.addWidget(self._list)
-            outer.addWidget(self._search_edit)
-            outer.addWidget(self._btn_row_widget)
+        # Unified layout: sort row already added above, then 全选 checkbox above.
+        outer.addWidget(self._search_edit)
+        outer.addWidget(self._list)
+        outer.addWidget(self._btn_row_widget)
 
         # Make every other child non-focusable so the popup never steals
         # focus from the parent QLineEdit.  The search edit is the only
@@ -369,10 +393,34 @@ class _MultiSelectPopup(QFrame):
                 continue
             w.setFocusPolicy(Qt.NoFocus)
 
-        self._select_all_btn.clicked.connect(self._select_all_visible)
+        # -- hover-only "仅筛此项" overlay --------------------------------
+        # A floating QToolButton that re-positions to whichever item the
+        # cursor is over, and disappears when the cursor leaves the list.
+        # Click → emit ``filterOnlyThis`` with that single value; the
+        # owner replaces the selection with that one item and closes.
+        # Parent to the list viewport so the button is part of the scrolling
+        # surface — mouse movement between a list item and the overlay does
+        # NOT trigger viewport Leave (which would otherwise hide the button
+        # the instant the user tries to click it, causing flicker).
+        self._hover_only_btn = QToolButton(self._list.viewport())
+        self._hover_only_btn.setText("仅筛此项")
+        self._hover_only_btn.setObjectName("HoverOnly")
+        self._hover_only_btn.setCursor(Qt.PointingHandCursor)
+        self._hover_only_btn.setToolTip("把筛选替换为只看这一项")
+        self._hover_only_btn.hide()
+        self._hover_only_btn.setFocusPolicy(Qt.NoFocus)
+        self._hover_only_btn.clicked.connect(self._on_hover_only_clicked)
+        self._hover_only_target: object | None = None
+
+        self._select_all_cb.clicked.connect(self._on_select_all_cb_clicked)
         self._invert_btn.clicked.connect(self._invert_visible)
         self._clear_btn.clicked.connect(self._clear_visible)
+        self._sort_asc_btn.clicked.connect(lambda: self._sort_visible(Qt.AscendingOrder))
+        self._sort_desc_btn.clicked.connect(lambda: self._sort_visible(Qt.DescendingOrder))
         self._list.itemChanged.connect(self._on_item_changed)
+        self._list.setMouseTracking(True)
+        self._list.itemEntered.connect(self._on_list_item_entered)
+        self._list.viewport().installEventFilter(self)
 
     # ---- public API for the owner ---------------------------------------
     def set_items(self, items: Iterable[tuple[str, object, bool]]) -> None:
@@ -386,6 +434,7 @@ class _MultiSelectPopup(QFrame):
             self._list.addItem(it)
         self._list.blockSignals(False)
         self._update_count()
+        self._sync_select_all_cb()
 
     def selected_values(self) -> list:
         return [self._list.item(i).data(Qt.UserRole)
@@ -407,6 +456,13 @@ class _MultiSelectPopup(QFrame):
             self._owner._on_popup_hover_leave()
         super().leaveEvent(event)
 
+    def hideEvent(self, event) -> None:
+        # Reset the hover overlay whenever the popup closes — otherwise
+        # the next time it opens the button may be at a stale position.
+        self._hover_only_btn.hide()
+        self._hover_only_target = None
+        super().hideEvent(event)
+
     def apply_filter(self, text: str) -> int:
         """Show only items containing ``text`` (case-insensitive). Returns visible count."""
         q = text.strip().lower()
@@ -417,6 +473,12 @@ class _MultiSelectPopup(QFrame):
             item.setHidden(hide)
             if not hide:
                 visible += 1
+        # The previously hovered item may have just been hidden, so the
+        # "仅筛此项" overlay would be pointing at nothing.
+        if self._hover_only_target is not None and self._hover_only_target.isHidden():
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
+        self._sync_select_all_cb()
         return visible
 
     def _on_search_text_edited(self, text: str) -> None:
@@ -439,18 +501,44 @@ class _MultiSelectPopup(QFrame):
         return any(not self._list.item(i).isHidden()
                    for i in range(self._list.count()))
 
-    def _select_all_visible(self) -> None:
+    def _on_select_all_cb_clicked(self) -> None:
+        # Toggle: if every visible item is checked, un-check them; else
+        # check them all. Mirrors the MyTable filter-popup "全选" behaviour
+        # (click twice = "反选效果" / uncheck all).
         self._list.blockSignals(True)
-        changed = False
-        for i in range(self._list.count()):
-            item = self._list.item(i)
-            if not item.isHidden() and item.checkState() != Qt.Checked:
-                item.setCheckState(Qt.Checked)
-                changed = True
+        visible = [i for i in range(self._list.count())
+                   if not self._list.item(i).isHidden()]
+        all_checked = bool(visible) and all(
+            self._list.item(i).checkState() == Qt.Checked for i in visible
+        )
+        new_state = Qt.Unchecked if all_checked else Qt.Checked
+        for i in visible:
+            self._list.item(i).setCheckState(new_state)
         self._list.blockSignals(False)
-        if changed:
+        if visible:
             self._update_count()
             self.selectionChanged.emit(self.selected_values())
+            self._sync_select_all_cb()
+
+    def _sync_select_all_cb(self) -> None:
+        """Sync the tristate "全选" checkbox with the visible items' state."""
+        total = self._list.count()
+        visible_idx = [i for i in range(total)
+                       if not self._list.item(i).isHidden()]
+        visible_count = len(visible_idx)
+        if visible_count == 0:
+            self._select_all_cb.setCheckState(Qt.Unchecked)
+            return
+        checked_count = sum(1 for i in visible_idx
+                            if self._list.item(i).checkState() == Qt.Checked)
+        self._select_all_cb.blockSignals(True)
+        if checked_count == 0:
+            self._select_all_cb.setCheckState(Qt.Unchecked)
+        elif checked_count == visible_count:
+            self._select_all_cb.setCheckState(Qt.Checked)
+        else:
+            self._select_all_cb.setCheckState(Qt.PartiallyChecked)
+        self._select_all_cb.blockSignals(False)
 
     def _invert_visible(self) -> None:
         """Toggle every currently visible item's check state."""
@@ -485,7 +573,74 @@ class _MultiSelectPopup(QFrame):
 
     def _on_item_changed(self, _item: QListWidgetItem) -> None:
         self._update_count()
+        self._sync_select_all_cb()
         self.selectionChanged.emit(self.selected_values())
+
+    # ---- in-popup sort (matches the MyTable filter popup) ---------------
+    def _sort_visible(self, order: Qt.SortOrder) -> None:
+        # Sort only the *visible* (search-filtered) items. Hidden items keep
+        # their original position so toggling the search box on/off doesn't
+        # jumble the underlying list. Sorting is by display text, case
+        # insensitive; ties are stable.
+        #
+        # Implementation: detach all items into a Python list, split into
+        # visible/hidden, sort the visible part, then re-insert in the new
+        # order. ``takeItem`` is index-sensitive (subsequent rows shift
+        # up), so we cannot sort in-place via take/insertItem.
+        reverse = (order == Qt.DescendingOrder)
+        items = [self._list.takeItem(0) for _ in range(self._list.count())]
+        visible = [it for it in items if not it.isHidden()]
+        hidden = [it for it in items if it.isHidden()]
+        visible.sort(key=lambda it: it.text().lower(), reverse=reverse)
+        self._list.blockSignals(True)
+        for it in visible + hidden:
+            self._list.addItem(it)
+        self._list.blockSignals(False)
+
+    # ---- hover "仅筛此项" overlay --------------------------------------
+    def _on_list_item_entered(self, item: QListWidgetItem) -> None:
+        if item is None or item.isHidden():
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
+            return
+        # Position the floating button over the right edge of the item row.
+        # ``visualItemRect`` already returns viewport-local coordinates and
+        # the button is parented to ``self._list.viewport()``, so we can
+        # use these directly — no need for ``self._list.x()`` offsets.
+        rect = self._list.visualItemRect(item)
+        if rect.isNull():
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
+            return
+        btn = self._hover_only_btn
+        btn.adjustSize()
+        bw, bh = btn.sizeHint().width(), btn.sizeHint().height()
+        # Anchor to the right edge of the item row, vertically centered
+        x = rect.right() - bw - 4
+        y = rect.top() + (rect.height() - bh) // 2
+        btn.move(max(2, x), max(2, y))
+        btn.show()
+        btn.raise_()
+        self._hover_only_target = item
+
+    def _on_hover_only_clicked(self) -> None:
+        item = self._hover_only_target
+        self._hover_only_btn.hide()
+        self._hover_only_target = None
+        if item is None:
+            return
+        value = item.data(Qt.UserRole)
+        self.filterOnlyThis.emit(value)
+        # After the owner handles the signal (replaces selection with
+        # [value] and closes the popup), there's nothing more to do here.
+
+    def eventFilter(self, watched, event):
+        # Hide the floating "仅筛此项" button when the mouse leaves the
+        # list viewport or the button itself is hidden by something else.
+        if watched is self._list.viewport() and event.type() == QEvent.Leave:
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
+        return super().eventFilter(watched, event)
 
     def _update_count(self) -> None:
         count = sum(
@@ -493,6 +648,7 @@ class _MultiSelectPopup(QFrame):
             if self._list.item(i).checkState() == Qt.Checked
         )
         self._count_label.setText(f"已选 {count} 项")
+        self._sync_select_all_cb()
 
 
 class MyCombo(QWidget):
@@ -523,13 +679,10 @@ class MyCombo(QWidget):
 
     def __init__(self, parent: QWidget | None = None,
                  placeholder: str = "请选择...",
-                 buttons_position: str = "top",
                  theme: dict | None = None,
                  search_in_popup: bool = True,
                  string_only: bool = False) -> None:
         super().__init__(parent)
-        if buttons_position not in {"top", "bottom"}:
-            raise ValueError("buttons_position must be 'top' or 'bottom'")
         self._placeholder = placeholder
         self._items: list[tuple[str, object]] = []
         self._selected_values: list = []
@@ -606,12 +759,12 @@ class MyCombo(QWidget):
 
         # ---- popup --------------------------------------------------------
         self._popup = _MultiSelectPopup(self,
-                                        buttons_at_top=(buttons_position == "top"),
                                         theme=self._theme,
                                         search_in_popup=search_in_popup,
                                         string_only=string_only)
         self._popup.selectionChanged.connect(self._on_popup_selection_changed)
         self._popup.requestClose.connect(self.hide_popup)
+        self._popup.filterOnlyThis.connect(self._on_filter_only_this)
 
         # Global click-outside watcher -- attached only while popup is open.
         self._outside_filter = _OutsideClickFilter(self, self._on_outside_click)
@@ -897,6 +1050,21 @@ class MyCombo(QWidget):
             # the line edit so they see the selection live.
             if not self._editing:
                 self._render_selection_to_edit()
+
+    def _on_filter_only_this(self, value: object) -> None:
+        """User clicked the hover-only "仅筛此项" badge on an item.
+        Replace the current selection with just that single value, refresh
+        the line edit, and close the popup.
+        """
+        if value in self._selected_values and len(self._selected_values) == 1:
+            # Already the only selection — close is enough.
+            self.hide_popup()
+            return
+        self._selected_values = [value]
+        self.selectionChanged.emit(list(self._selected_values))
+        self._editing = False  # selection now drives the line edit
+        self._render_selection_to_edit()
+        self.hide_popup()
 
     def _on_text_edited(self, text: str) -> None:
         # The user actually typed something -> enter editing mode and filter.

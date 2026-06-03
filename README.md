@@ -508,6 +508,31 @@ def _on_popup_sort(self, order: Qt.SortOrder) -> None:
 
 `QTest.mouseClick` × 7 场景 PASS：基础升降、空列表、1 项、含 "(空白)"、check 状态保留、MyTable 集成（主表格 `sortByColumn` 0 次调用）。
 
+**v3 — 弹窗功能统一：MyCombo 加升序/降序、全选 toggle、hover「仅筛此项」；MyTable filter 加反选/重置、hover「仅筛此项」**：
+
+5.9 v2 之后，弹窗之间功能不同步：
+- MyCombo 有 `全选 / 反选 / 重置` 三个按钮，但**没有**升序/降序，`全选` 是"一次全勾"不会"二次反选"
+- MyTable filter 有 `升序 / 降序` 和 `(全选)` tristate checkbox，但**没有**反选/重置按钮
+
+v3 统一两者，**所有弹窗**共享：
+- `升序 / 降序`：弹窗内可见项重排（5.9 v2 修复）
+- `全选`：**toggle** —— 1 次点 check-all, 2 次点 uncheck-all (反选效果)
+- `反选`：翻转可见项的勾选
+- `重置`：取消所有勾选（不关弹窗）
+- `确定` / `取消`：MyTable filter 专用（MyCombo 是即时生效）
+- `仅筛此项` (hover overlay)：鼠标悬停某项时弹出一个蓝色按钮，点击**直接把筛选替换为只看这一项 + 自动关弹窗**
+
+实现细节：
+- **MyCombo** 加 升序/降序 sort row (按 `display.lower()` 排序，**保留勾选状态**；用 `takeItem` 顺序拆 item 避免 index 错位)；全选按钮改为 toggle (看 list 实际状态而不是按钮自己)；新增 `filterOnlyThis(object)` 信号 + `_on_filter_only_this` handler → 替换 selection 为 `[value]` + 关弹窗
+- **MyTable filter** 加 反选 / 重置 按钮（重置 = 仅取消勾选，不关弹窗，**不 emit** `filterChanged`）; 新增 `filterOnlyThis(int, object)` 信号 + `_on_filter_only_this` handler → `set_column_filter(col, {value})` + `set_active(col, True)` + 弹窗 self-close
+- **hover overlay**: `_FilterPopup` / `_MultiSelectPopup` 各持有 1 个 `QToolButton("仅筛此项", #HoverOnly)`，监听 `QListWidget.itemEntered` 重新定位，监听 `viewport().Leave` + 自身 `hideEvent` 隐藏。点击 → emit `filterOnlyThis` → owner 处理 + 弹窗自关
+
+5.9 v3 测试 (4 + 6 场景全 PASS):
+- MyCombo: sort 升降 / 全选 toggle (3 state) / 全选 partial→all / hover 单项 emit / hover 隐藏 (搜索后) / sort 保留勾选
+- MyTable filter: 反选 / 重置 (不关) / hover 单项 emit / self-close / MyTable 集成 (col_filter 应用 + visible row 数变化) / 反选+重置+全选 互不冲突
+
+视觉: 7 张 PNG 截图确认布局 (升序/降序/全选/反选/重置/hover 按钮位置/确定 蓝色 primary)。
+
 ### 5.10 数字列需要"按数字比较"开关
 
 **现象**：工资 / 年龄这种数字列，列表里有 30, 35, 41... 多选时只能 `set = {30, 35}` 这种枚举式筛选，要找"年龄 > 30 的所有员工"做不了。

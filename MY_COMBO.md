@@ -72,7 +72,6 @@ cb.set_dict_items(DISPLAY_TO_CODE, swap=True)
 MyCombo(
     parent: QWidget | None = None,
     placeholder: str = "请选择...",
-    buttons_position: str = "top",     # "top" 或 "bottom"
     theme: dict | None = None,         # 颜色 / 圆角 / 字号 主题覆盖
     search_in_popup: bool = True,     # 弹窗内是否带搜索框
     string_only: bool = False,           # 是否为"自由输入"模式（弹窗只作提示）
@@ -82,7 +81,6 @@ MyCombo(
 | 参数 | 说明 |
 |---|---|
 | `placeholder` | 输入框无选中、无输入时显示的占位文字 |
-| `buttons_position` | 弹窗中"全选/反选/取消"按钮区的位置：列表上方 (`"top"`) 或下方 (`"bottom"`) |
 | `theme` | 部分覆盖 `DEFAULT_THEME` 的主题字典（见下文 *主题* 一节） |
 | `search_in_popup` | 弹窗内**是否带搜索框**。默认 `True`——会在按钮区和列表之间显示一个 `QLineEdit`，与主控件双向同步；设为 `False` 时弹窗退回纯勾选面板，过滤只能在主控件输入 |
 | `string_only` | **解锁输入框**。默认 `False`（多选勾选：输入框显示当前已选项的标签拼接）。设为 `True` 时输入框**完全可编辑**且不会被选中项覆盖，但**所有多选/勾选/按钮/信号行为完全不变**——只是多了一个 `value() -> str` 让你拿到用户输入的字符串。详见下文 *解锁输入框（string_only）* 一节 |
@@ -258,7 +256,6 @@ cb.set_theme({"background": "#202124", "text_color": "#e8eaed", ...})
 ```python
 cb = MyCombo(
     placeholder="选择标签...",
-    buttons_position="bottom",
 )
 cb.set_items([
     ("高优先级", "P0"),

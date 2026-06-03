@@ -294,6 +294,7 @@ class _FilterPopup(QFrame):
 
     filterChanged = Signal(int, object)            # column, set or None
     numericFilterChanged = Signal(int, object)     # column, list[(op, value)] or None
+    filterOnlyThis = Signal(int, object)           # column, value: "filter to only this item"
 
     def __init__(self, column: int, values: Iterable[str],
                  selected: set[str] | None,
@@ -344,6 +345,7 @@ class _FilterPopup(QFrame):
                 outline: 0;
             }
             QListWidget::item { padding: 4px 6px; }
+            QListWidget::item:hover { background: #f1f3f4; }
             QListWidget::item:selected { background: #e8f0fe; color: #1a73e8; }
             QPushButton {
                 border: 1px solid #dadce0;
@@ -364,6 +366,15 @@ class _FilterPopup(QFrame):
                 padding: 0;
             }
             QToolButton:hover { background: #fce8e6; color: #c5221f; }
+            QToolButton#HoverOnly {
+                background: #1a73e8;
+                color: #ffffff;
+                border: 1px solid #1a73e8;
+                border-radius: 10px;
+                padding: 1px 8px;
+                font-size: 11px;
+            }
+            QToolButton#HoverOnly:hover { background: #1765cc; border-color: #1765cc; }
             """
         )
 
@@ -425,15 +436,35 @@ class _FilterPopup(QFrame):
         v.addWidget(self._list)
 
         btn_row = QHBoxLayout()
+        self._invert_btn = QPushButton("反选")
+        self._reset_btn = QPushButton("重置")
+        btn_row.addWidget(self._invert_btn)
+        btn_row.addWidget(self._reset_btn)
         btn_row.addStretch(1)
-        self._clear_btn = QPushButton("清除筛选")
         self._cancel_btn = QPushButton("取消")
         self._ok_btn = QPushButton("确定")
         self._ok_btn.setObjectName("primary")
-        btn_row.addWidget(self._clear_btn)
         btn_row.addWidget(self._cancel_btn)
         btn_row.addWidget(self._ok_btn)
         v.addLayout(btn_row)
+
+        # -- hover-only "仅筛此项" overlay -------------------------------
+        # Parented to the list viewport so that mouse movement between a
+        # list item and the button does NOT trigger viewport Leave (which
+        # would instantly hide the button, causing flicker when the user
+        # tries to click it).
+        self._hover_only_btn = QToolButton(self._list.viewport())
+        self._hover_only_btn.setText("仅筛此项")
+        self._hover_only_btn.setObjectName("HoverOnly")
+        self._hover_only_btn.setCursor(Qt.PointingHandCursor)
+        self._hover_only_btn.setToolTip("把筛选替换为只看这一项")
+        self._hover_only_btn.hide()
+        self._hover_only_btn.setFocusPolicy(Qt.NoFocus)
+        self._hover_only_btn.clicked.connect(self._on_hover_only_clicked)
+        self._hover_only_target: QListWidgetItem | None = None
+        self._list.setMouseTracking(True)
+        self._list.itemEntered.connect(self._on_list_item_entered)
+        self._list.viewport().installEventFilter(self)
 
         self._populate_list("")
 
@@ -442,7 +473,8 @@ class _FilterPopup(QFrame):
         self._list.itemChanged.connect(self._on_item_changed)
         self._sort_asc.clicked.connect(lambda: self._on_popup_sort(Qt.AscendingOrder))
         self._sort_desc.clicked.connect(lambda: self._on_popup_sort(Qt.DescendingOrder))
-        self._clear_btn.clicked.connect(self._on_clear)
+        self._invert_btn.clicked.connect(self._on_invert)
+        self._reset_btn.clicked.connect(self._on_reset)
         self._ok_btn.clicked.connect(self._on_ok)
         self._cancel_btn.clicked.connect(self.close)
         if self._numeric_toggle is not None:
@@ -512,6 +544,10 @@ class _FilterPopup(QFrame):
             self._list.addItem(item)
         self._list.blockSignals(False)
         self._update_select_all_state()
+        # The previously hovered item is gone after a clear()/repopulate().
+        if self._hover_only_target is not None:
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
 
     def _update_select_all_state(self) -> None:
         total = self._list.count()
@@ -596,13 +632,33 @@ class _FilterPopup(QFrame):
         self._list.blockSignals(False)
         self._update_select_all_state()
 
-    def _on_clear(self) -> None:
-        # Clearing wipes both text and numeric filters.
-        if self._numeric_toggle is not None:
-            self._numeric_toggle.setChecked(False)
-        self.filterChanged.emit(self._column, None)
-        self.numericFilterChanged.emit(self._column, None)
-        self.close()
+    def _on_invert(self) -> None:
+        # Invert every visible item's check state (mirror of MyCombo's
+        # ``反选`` button). Local to the popup — does not apply / close.
+        self._list.blockSignals(True)
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            if it.isHidden():
+                continue
+            it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked
+                             else Qt.Checked)
+        self._list.blockSignals(False)
+        self._sync_selected_from_list()
+        self._update_select_all_state()
+
+    def _on_reset(self) -> None:
+        # 重置: uncheck every visible item in the popup. Local action —
+        # does NOT close, does NOT emit any filter signal. The user can
+        # pick again. To actually apply the empty selection (= "no
+        # filter / show all") they still need to click 确定.
+        self._list.blockSignals(True)
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            if not it.isHidden() and it.checkState() == Qt.Checked:
+                it.setCheckState(Qt.Unchecked)
+        self._list.blockSignals(False)
+        self._sync_selected_from_list()
+        self._update_select_all_state()
 
     def _on_ok(self) -> None:
         if self._numeric_toggle is not None and self._numeric_toggle.isChecked():
@@ -643,6 +699,56 @@ class _FilterPopup(QFrame):
             self._condition_rows[0]._value.selectAll()
         else:
             self._search.setFocus()
+
+    # ---- hover-only "仅筛此项" overlay ---------------------------------
+    def _on_list_item_entered(self, item: QListWidgetItem) -> None:
+        if item is None or item.isHidden():
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
+            return
+        rect = self._list.visualItemRect(item)
+        if rect.isNull():
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
+            return
+        btn = self._hover_only_btn
+        btn.adjustSize()
+        bw, bh = btn.sizeHint().width(), btn.sizeHint().height()
+        # ``visualItemRect`` is viewport-local, and the button is now
+        # parented to the viewport, so offset-free positioning works.
+        x = rect.right() - bw - 4
+        y = rect.top() + (rect.height() - bh) // 2
+        btn.move(max(2, x), max(2, y))
+        btn.show()
+        btn.raise_()
+        self._hover_only_target = item
+
+    def _on_hover_only_clicked(self) -> None:
+        item = self._hover_only_target
+        self._hover_only_btn.hide()
+        self._hover_only_target = None
+        if item is None:
+            return
+        value = item.data(Qt.UserRole)
+        self.filterOnlyThis.emit(self._column, value)
+        # Self-close so the user doesn't need to dismiss the popup — this
+        # is a one-click shortcut for "filter to this single value".
+        self.close()
+
+    def hideEvent(self, event) -> None:
+        # Reset hover overlay state on close so the next open starts clean.
+        self._hover_only_btn.hide()
+        self._hover_only_target = None
+        super().hideEvent(event)
+
+    def eventFilter(self, watched, event):
+        # Hide the floating "仅筛此项" button when the cursor leaves the
+        # list viewport — the item is no longer the one the user is
+        # looking at.
+        if watched is self._list.viewport() and event.type() == QEvent.Leave:
+            self._hover_only_btn.hide()
+            self._hover_only_target = None
+        return super().eventFilter(watched, event)
 
 
 class _FilterHeaderView(QHeaderView):
@@ -1000,10 +1106,18 @@ class MyTable(QTableView):
         )
         popup.filterChanged.connect(self._on_filter_changed)
         popup.numericFilterChanged.connect(self._on_numeric_filter_changed)
+        popup.filterOnlyThis.connect(self._on_filter_only_this)
         # The popup's 升序/降序 buttons sort the popup's *own* list, not the
         # main table — the main table's column sort is driven by the header
         # arrows (see ``_FilterHeaderView`` and ``_on_header_sort_indicator``).
         popup.show_at(global_pos)
+
+    def _on_filter_only_this(self, column: int, value: object) -> None:
+        # Hover-overlay shortcut: replace the column's filter with a
+        # single-value set. The popup self-closes after emitting this
+        # signal (see ``_FilterPopup._on_hover_only_clicked``).
+        self._proxy.set_column_filter(column, {value})
+        self._header.set_active(column, True)
 
     def _on_filter_changed(self, column: int, allowed: set[str] | None) -> None:
         self._proxy.set_column_filter(column, allowed)
