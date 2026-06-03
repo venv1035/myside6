@@ -1,5 +1,5 @@
 from .badge import Badge, BadgeList, BadgeDict
-from .drag_bar import DragBar
+from .drag_bar import DragBar, DragBarItem
 from .my_table import MyTable, ActionDelegate, ACTION_STYLES
 from .my_combo import (
     MyCombo,
@@ -15,6 +15,7 @@ __all__ = [
     "BadgeList",
     "BadgeDict",
     "DragBar",
+    "DragBarItem",
     "MyTable",
     "ActionDelegate",
     "ACTION_STYLES",
