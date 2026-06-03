@@ -436,11 +436,28 @@ if not active and not hover:
 
 ### 5.9 筛选默认"全勾选"应该是"不过滤"
 
-**现象**：弹窗打开默认所有项已勾选，用户点"确定"后行数没变化——符合直觉。但早期实现里点"确定"会下发 `set(self._all_values)`（语义上"全选"），proxy 收到后做精确包含判断：行不匹配会被过滤掉——结果意外隐藏了部分行。
+**v1 错误方案（已废弃）**：引入 `_unfiltered: bool` 状态，弹窗打开时所有项视觉上已勾选但 flag 标记"未筛选"；用户取消勾选 → flag 翻 False → 真正的 filter 激活。
 
-**根因**：把"全勾选"理解为"我要选中这一列的所有值"，但漏斗筛选的语义里"包含所有值"= "不过滤"；两者混淆导致把"全选"和"严格全集"绑定了。
+**问题**：
+- 视觉状态 ≠ 实际状态，**用户认知负担大**：明明看到"全勾"却要点"确定"才生效，第一次用必然困惑。
+- 弹窗打开后用户顺手再点"全选"试图"反选"（清空），得到的是空 selection + `_unfiltered=False` → 走 `set()` 分支 → 表格 0 行。**没达到"反选"预期，反而清空了表格。**
+- Excel / Outlook / 大多数表格控件的 filter 弹窗默认就是"全不勾选"，用户主动勾选要保留的值——这才符合"点什么是筛选什么"的操作直觉。
 
-**修复**：引入 `_unfiltered: bool` 状态。弹窗打开时 `_unfiltered=True` 且 list 视觉全勾；用户改 checkbox → `_unfiltered=False`；点"确定"时按 `_unfiltered` 决定 emit `None` (不过滤) 还是 `set(self._selected)`。
+**v2 正确方案（Excel-like，零心智负担）**：
+- 删除 `_unfiltered` flag。**弹窗打开默认全部 Unchecked**（除非有 prior filter 还原）。
+- `确定` 按钮语义改写：
+  - 空 selection → `filterChanged.emit(column, None)` = 不过滤 = 显示全部
+  - 非空 selection → `filterChanged.emit(column, set(_selected))` = 只保留勾选项
+- "全选" `QCheckBox` 改为 tristate toggle（Unchecked/PartiallyChecked/Checked）：
+  - 第一次点（Unchecked）→ Checked（全勾）
+  - 第二次点（Checked）→ Unchecked（全不勾 = "反选效果"）
+  - 部分勾时点 → Checked（全勾）
+- "清除筛选" 按钮保留——显式清掉所有列的 filter（含 numeric）。
+- 视觉验证（截图为证）：
+  - 首次打开（无 prior）：5 个城市全 Unchecked，"全选"是 Unchecked
+  - 点"全选" 1 次：5 个全 Checked，"全选"是 Checked
+  - 点"全选" 2 次：5 个全 Unchecked，"全选"是 Unchecked ← "反选效果"
+  - reopen with prior `{"北京","上海"}`：前 2 个 Checked，后 3 个 Unchecked，"全选"是 PartiallyChecked
 
 ### 5.10 数字列需要"按数字比较"开关
 

@@ -309,14 +309,14 @@ class _FilterPopup(QFrame):
         self._all_values = sorted({str(v) for v in values},
                                   key=lambda s: (s == "", s.lower()))
         # Text-mode state.
-        # ``_unfiltered`` is True until the user un-checks at least one item
-        # (or re-checks everything after a partial change). Only when False
-        # does "确定" emit a real filter set.
+        # Default: nothing checked (Excel-like — user explicitly checks the
+        # values they want to keep). An empty selection at "确定" time is
+        # treated as "no filter / show all", matching the natural workflow
+        # "click what to filter". If a prior filter exists, restore it
+        # verbatim so re-opening the popup shows the active filter set.
         if selected is None:
-            self._unfiltered = True
-            self._selected: set[str] = set(self._all_values)
+            self._selected: set[str] = set()
         else:
-            self._unfiltered = False
             self._selected = set(selected)
         # Numeric-mode state.
         self._numeric_mode = numeric
@@ -414,7 +414,7 @@ class _FilterPopup(QFrame):
         self._search.setClearButtonEnabled(True)
         v.addWidget(self._search)
 
-        self._select_all = QCheckBox("(全选)", self)
+        self._select_all = QCheckBox("全选", self)
         self._select_all.setTristate(True)
         v.addWidget(self._select_all)
 
@@ -530,8 +530,11 @@ class _FilterPopup(QFrame):
         self._select_all.blockSignals(False)
 
     def _on_select_all_clicked(self) -> None:
-        # Cycle: Unchecked -> Checked -> Unchecked. Toggling to Checked
-        # means "all visible", which restores the un-filtered default.
+        # Tristate toggle for the "全选" checkbox at the top of the list.
+        # Cycles Unchecked/PartiallyChecked -> Checked, Checked -> Unchecked.
+        # In particular, the second click on an already-all-checked list
+        # un-checks every item — this is the "反选效果" expected by users
+        # who want to switch between "all visible" and "nothing visible".
         if self._select_all.checkState() == Qt.Checked:
             state = Qt.Unchecked
         else:
@@ -542,17 +545,10 @@ class _FilterPopup(QFrame):
             self._list.item(i).setCheckState(state)
         self._list.blockSignals(False)
         self._sync_selected_from_list()
-        # Re-checking every visible item brings us back to the default.
-        if state == Qt.Checked:
-            self._unfiltered = True
-        else:
-            self._unfiltered = False
 
     def _on_item_changed(self, _item: QListWidgetItem) -> None:
         self._sync_selected_from_list()
         self._update_select_all_state()
-        # Any user interaction activates the filter.
-        self._unfiltered = False
 
     def _sync_selected_from_list(self) -> None:
         for i in range(self._list.count()):
@@ -582,10 +578,12 @@ class _FilterPopup(QFrame):
             # 同时清理文本 filter
             self.filterChanged.emit(self._column, None)
         else:
-            if self._unfiltered or self._selected == set(self._all_values):
+            # Excel-like semantics: empty selection = no filter (show all).
+            # The user sees an unchecked list and "确定" without picking
+            # anything → fall back to the un-filtered default. Non-empty
+            # selection → keep only the checked values.
+            if not self._selected:
                 self.filterChanged.emit(self._column, None)
-            elif not self._selected:
-                self.filterChanged.emit(self._column, set())
             else:
                 self.filterChanged.emit(self._column, set(self._selected))
             # 清理 numeric filter (回到纯文本模式)
