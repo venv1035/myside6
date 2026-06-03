@@ -1,4 +1,4 @@
-from .my_table import MyTable, ActionDelegate
+from .my_table import MyTable, ActionDelegate, ACTION_STYLES
 from .my_combo import (
     MyCombo,
     DEFAULT_THEME,
@@ -11,6 +11,7 @@ from .my_combo import (
 __all__ = [
     "MyTable",
     "ActionDelegate",
+    "ACTION_STYLES",
     "MyCombo",
     "DEFAULT_THEME",
     "GOOGLE_THEME",

@@ -1482,6 +1482,14 @@ class NoFocusDelegate(QStyledItemDelegate):
         super().paint(painter, opt, index)
 
 
+ACTION_STYLES = {
+    "delete":   dict(bg_normal="#ffffff", bg_hover="#fdecea", border="#ea4335", color="#c5221f"),
+    "confirm":  dict(bg_normal="#ffffff", bg_hover="#e8f5e9", border="#43a047", color="#2e7d32"),
+    "info":     dict(bg_normal="#ffffff", bg_hover="#e3f2fd", border="#1e88e5", color="#1565c0"),
+    "warning":  dict(bg_normal="#ffffff", bg_hover="#fff3e0", border="#fb8c00", color="#e65100"),
+}
+
+
 class ActionDelegate(QStyledItemDelegate):
     """Render a clickable button inside a cell. Used to show inline actions
     (e.g. a "delete" button) at the end of every row.
@@ -1491,14 +1499,26 @@ class ActionDelegate(QStyledItemDelegate):
         delegate = ActionDelegate("删除", parent=table)
         delegate.clicked.connect(lambda src_row: table.delete_rows([src_row]))
         table.setItemDelegateForColumn(action_col, delegate)
+
+    To customise the button colours, pass a ``style`` dict (or one of the
+    presets from :data:`ACTION_STYLES`)::
+
+        delegate = ActionDelegate("确认", parent=table,
+                                  style=ACTION_STYLES["confirm"])
     """
 
     clicked = Signal(int)  # source row index
 
-    def __init__(self, text: str = "删除", parent: QTableView | None = None) -> None:
+    def __init__(self, text: str = "删除", parent: QTableView | None = None,
+                 *, style: dict | None = None) -> None:
         super().__init__(parent)
         self._text = text
         self._hover_row = -1
+        s = ACTION_STYLES["delete"] if style is None else style
+        self._bg_normal = s["bg_normal"]
+        self._bg_hover = s["bg_hover"]
+        self._border = s["border"]
+        self._color = s["color"]
         if parent is not None:
             parent.setMouseTracking(True)
             parent.viewport().installEventFilter(self)
@@ -1511,11 +1531,11 @@ class ActionDelegate(QStyledItemDelegate):
             painter.fillRect(option.rect, QColor("#f1f3f4"))
         rect = option.rect.adjusted(6, 4, -6, -4)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(QPen(QColor("#ea4335"), 1))
-        painter.setBrush(QColor("#fdecea") if self._hover_row == index.row()
-                         else QColor("#ffffff"))
+        painter.setPen(QPen(QColor(self._border), 1))
+        painter.setBrush(QColor(self._bg_hover) if self._hover_row == index.row()
+                         else QColor(self._bg_normal))
         painter.drawRoundedRect(rect, 6, 6)
-        painter.setPen(QColor("#c5221f"))
+        painter.setPen(QColor(self._color))
         painter.drawText(rect, Qt.AlignCenter, self._text)
         painter.restore()
 

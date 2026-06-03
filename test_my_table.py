@@ -35,7 +35,7 @@ t.set_checkable_rows(True, CHECK_COL)
 t.set_editable_columns(EDITABLE_COLS)
 t.set_column_numeric(4, True)
 
-d = ActionDelegate("删除", parent=t)
+d = ActionDelegate("大宝贝", parent=t)
 d.clicked.connect(lambda src_row: t.delete_rows([src_row]))
 t.setItemDelegateForColumn(ACTION_COL, d)
 t.setColumnWidth(ACTION_COL, 90)
