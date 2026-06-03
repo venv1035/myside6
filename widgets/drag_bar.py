@@ -1,16 +1,41 @@
 from __future__ import annotations
 
+import json
 from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import (
-    QColor, QDrag, QFont, QIcon, QPainter, QPen, QPixmap,
+    QColor, QDrag, QFont, QIcon, QMouseEvent, QPainter, QPen, QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea,
-    QSizePolicy, QVBoxLayout, QWidget, QWidgetItem,
+    QVBoxLayout, QWidget, QWidgetItem,
 )
 
-
 _MIME = "application/x-dragbar-items"
+
+
+# ── helpers ─────────────────────────────────────────────────────────────
+
+def _mime_data(names, items_meta, source_id: int) -> QMimeData:
+    """Build MIME data for a drag operation."""
+    payload = json.dumps({
+        "source_id": source_id,
+        "items": [
+            {"name": n, "text": items_meta[n]["text"],
+             "icon": items_meta[n].get("icon", "")}
+            for n in names if n in items_meta
+        ],
+    })
+    mime = QMimeData()
+    mime.setData(_MIME, payload.encode("utf-8"))
+    return mime
+
+
+def _parse_mime(event) -> dict | None:
+    try:
+        raw = event.mimeData().data(_MIME).data().decode("utf-8")
+        return json.loads(raw)
+    except Exception:
+        return None
 
 
 # ── FlowLayout ──────────────────────────────────────────────────────────
@@ -132,11 +157,44 @@ class _TrashZone(QWidget):
     def dropEvent(self, event):
         self._over = False
         self.update()
-        raw = event.mimeData().data(_MIME).data().decode("utf-8")
-        names = raw.split(",") if raw else []
-        if names:
+        parsed = _parse_mime(event)
+        if parsed:
+            names = [it["name"] for it in parsed["items"]]
             self.accepted.emit(names)
         event.acceptProposedAction()
+
+
+# ── Drop container (hosts flow layout, forwards drag events) ────────────
+
+class _DropContainer(QWidget):
+    """Widget that accepts drops and delegates to the owning DragBar."""
+
+    def __init__(self, bar: "DragBar"):
+        super().__init__()
+        self._bar = bar
+        self.setAcceptDrops(True)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        bar = self._bar
+        if bar._rubber_rect is not None:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(QPen(QColor(26, 115, 232), 1.5))
+            p.setBrush(QColor(26, 115, 232, 25))
+            p.drawRect(bar._rubber_rect)
+
+    def dragEnterEvent(self, event):
+        self._bar._on_drag_enter(event)
+
+    def dragMoveEvent(self, event):
+        self._bar._on_drag_move(event)
+
+    def dragLeaveEvent(self, event):
+        self._bar._on_drag_leave(event)
+
+    def dropEvent(self, event):
+        self._bar._on_drop(event)
 
 
 # ── DragBar item ────────────────────────────────────────────────────────
@@ -149,6 +207,7 @@ class _DragItem(QWidget):
         super().__init__(parent)
         self._name = name
         self._text = text
+        self._icon_src = icon if isinstance(icon, str) else ""
         self._icon = QIcon()
         if icon is not None:
             self._icon = QIcon(icon) if isinstance(icon, str) else icon
@@ -162,6 +221,10 @@ class _DragItem(QWidget):
     @property
     def name(self):
         return self._name
+
+    @property
+    def icon_src(self) -> str:
+        return self._icon_src
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -194,7 +257,7 @@ class _DragItem(QWidget):
         p.setFont(font)
         p.drawText(QRect(0, 40, self.width(), 22), Qt.AlignCenter, self._text)
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
             self._drag_start = event.position().toPoint()
             mod = QApplication.keyboardModifiers()
@@ -203,6 +266,8 @@ class _DragItem(QWidget):
                 bool(mod & Qt.ControlModifier),
                 bool(mod & Qt.ShiftModifier),
             )
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -213,10 +278,12 @@ class _DragItem(QWidget):
         super().mouseMoveEvent(event)
 
     def enterEvent(self, event):
-        self._hovered = True; self.update()
+        self._hovered = True
+        self.update()
 
     def leaveEvent(self, event):
-        self._hovered = False; self.update()
+        self._hovered = False
+        self.update()
 
 
 # ── DragBar ─────────────────────────────────────────────────────────────
@@ -224,29 +291,13 @@ class _DragItem(QWidget):
 class DragBar(QWidget):
     """可拖拽图标工具栏。
 
-    Features
-    --------
-    • 每个元素有 ``name``（标识）、``text``（显示文字）、``icon``（图标）
-    • 拖拽排序（支持单选／多选拖动）
-    • 多选：**Ctrl**+单击 切换选中，**Shift**+单击 范围选中
-    • 末尾回收站 — 将元素拖入即可删除
-    • 可配置元素间距（``spacing``）
-    • ``fixed_length=None`` 自动撑开；= 像素值时固定宽度，元素
-      换行排列（FlowLayout）
-
-    Usage ::
-
-        bar = DragBar(spacing=8)
-        bar.add_item("calc", "计算器", "calc.png")
-        bar.add_item("note", "记事本", "note.png")
-        bar.item_removed.connect(lambda n: print(f"已删除: {n}"))
-        bar.item_moved.connect(lambda n, i: print(f"{n} 移到 {i}"))
+    支持同一 Bar 内拖拽排序、跨 Bar 拖拽、多选、回收站删除。
 
     Signals
     -------
     item_moved(name, new_index)
     item_removed(name)
-    selection_changed([names…])
+    selection_changed([names...])
     """
 
     item_moved = Signal(str, int)
@@ -261,19 +312,20 @@ class DragBar(QWidget):
         self._widgets: dict[str, _DragItem] = {}
         self._selected: set[str] = set()
         self._last_clicked: str | None = None
+        self._drag_data: dict | None = None  # current drag payload
 
-        # flow container
-        self._flow_widget = QWidget()
+        # container with flow layout + drop forwarding
+        self._flow_widget = _DropContainer(self)
         self._flow = _FlowLayout(self._flow_widget)
         self._flow.setSpacing(spacing)
         self._flow.setContentsMargins(4, 4, 4, 4)
 
-        # trash (last item in flow)
+        # trash
         self._trash = _TrashZone()
         self._trash.accepted.connect(self._on_trash_drop)
         self._flow.addWidget(self._trash)
 
-        # scroll area for overflow
+        # scroll area
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -294,7 +346,7 @@ class DragBar(QWidget):
         if name in self._widgets:
             return
         w = _DragItem(name, text, icon, parent=self._flow_widget)
-        w.dragRequested.connect(self._start_drag)
+        w.dragRequested.connect(self._on_item_drag_requested)
         w.clicked.connect(self._on_item_clicked)
         self._names.append(name)
         self._widgets[name] = w
@@ -304,7 +356,7 @@ class DragBar(QWidget):
         if name in self._widgets:
             return
         w = _DragItem(name, text, icon, parent=self._flow_widget)
-        w.dragRequested.connect(self._start_drag)
+        w.dragRequested.connect(self._on_item_drag_requested)
         w.clicked.connect(self._on_item_clicked)
         self._names.insert(index, name)
         self._widgets[name] = w
@@ -345,6 +397,10 @@ class DragBar(QWidget):
         self._update_selection()
         self.selection_changed.emit([])
 
+    def set_spacing(self, spacing: int) -> None:
+        self._spacing = spacing
+        self._flow.setSpacing(spacing)
+
     # ── selection ───────────────────────────────────────────────────────
 
     def _update_selection(self) -> None:
@@ -354,7 +410,10 @@ class DragBar(QWidget):
 
     def _on_item_clicked(self, name: str, ctrl: bool, shift: bool) -> None:
         if ctrl:
-            self._selected.symmetric_difference_update([name])
+            if name in self._selected:
+                self._selected.discard(name)
+            else:
+                self._selected.add(name)
         elif shift and self._last_clicked and name != self._last_clicked:
             try:
                 i0 = self._names.index(self._last_clicked)
@@ -371,19 +430,21 @@ class DragBar(QWidget):
         self._update_selection()
         self.selection_changed.emit(list(self._selected))
 
-    # ── drag ────────────────────────────────────────────────────────────
+    # ── drag initiation (from item) ─────────────────────────────────────
 
-    def _start_drag(self, clicked_name: str) -> None:
+    def _on_item_drag_requested(self, clicked_name: str) -> None:
         names = list(self._selected) if self._selected else [clicked_name]
         if not names:
             return
 
         drag = QDrag(self)
-        mime = QMimeData()
-        mime.setData(_MIME, ",".join(names).encode("utf-8"))
+        meta = {n: {"text": self._widgets[n]._text,
+                     "icon": self._widgets[n]._icon_src}
+                for n in names if n in self._widgets}
+        mime = _mime_data(names, meta, id(self))
         drag.setMimeData(mime)
 
-        # composite pixmap of selected items
+        # composite pixmap
         widgets = [self._widgets[n] for n in names if n in self._widgets]
         if widgets:
             tw = sum(w.width() for w in widgets) + (len(widgets) - 1) * 4
@@ -398,50 +459,96 @@ class DragBar(QWidget):
             drag.setPixmap(pm)
             drag.setHotSpot(QPoint(0, 0))
 
-        drag.exec(Qt.MoveAction)
+        action = drag.exec(Qt.MoveAction | Qt.CopyAction)
+        if action == Qt.MoveAction and self._drag_data is None:
+            # Successful move to a different bar → source items already
+            # handled via dropEvent on the target; but if the drag was
+            # accepted but we never got a drop on a DIFFERENT bar,
+            # we do nothing. The source items stay.
+            pass
 
-    # mouse events on empty area → deselect all
-    def mousePressEvent(self, event):
-        self._drag_start = event.position().toPoint()
-        self.deselect_all()
-        super().mousePressEvent(event)
+    # ── drop target (via _DropContainer) ────────────────────────────────
 
-    # ── drop ────────────────────────────────────────────────────────────
+    def _on_drag_enter(self, event):
+        data = _parse_mime(event)
+        if data is None:
+            event.ignore()
+            return
+        self._drag_data = data
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
 
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasFormat(_MIME):
-            event.acceptProposedAction()
+    def _on_drag_move(self, event):
+        data = _parse_mime(event)
+        if data is None:
+            event.ignore()
+            return
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
 
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasFormat(_MIME):
-            event.acceptProposedAction()
+    def _on_drag_leave(self, event):
+        self._drag_data = None
 
-    def dropEvent(self, event):
-        raw = event.mimeData().data(_MIME).data().decode("utf-8")
-        names = raw.split(",") if raw else []
-        names = [n for n in names if n in self._widgets]
-        if not names:
+    def _on_drop(self, event):
+        data = _parse_mime(event)
+        if data is None:
+            event.ignore()
             return
 
-        # drop index
-        local = self._flow_widget.mapFrom(self, event.position().toPoint())
+        source_id = data.get("source_id")
+        items_data = data.get("items", [])
+        if not items_data:
+            event.ignore()
+            return
+
+        # drop position (already in _flow_widget coords)
+        local = event.position().toPoint()
         idx = self._drop_index(local)
-        idx = min(idx, len(self._names))
 
-        # remove from current positions, insert at idx
-        for n in names:
-            if n in self._names:
+        same_bar = (source_id == id(self))
+
+        if same_bar:
+            # Reorder within same bar
+            names = [it["name"] for it in items_data]
+            names = [n for n in names if n in self._widgets]
+            if not names:
+                event.ignore()
+                return
+            idx = min(idx, len(self._names))
+            for n in names:
+                if n in self._names:
+                    self._names.remove(n)
+            if idx > len(self._names):
+                idx = len(self._names)
+            self._names[idx:idx] = names
+            self._rebuild()
+            self._selected = set(names)
+            self._update_selection()
+            for n in names:
+                self.item_moved.emit(n, self._names.index(n))
+            self.selection_changed.emit(list(self._selected))
+        else:
+            # Cross-bar: copy items into this bar
+            for it_data in items_data:
+                n = it_data["name"]
+                # avoid name clash
+                if n in self._widgets:
+                    n = self._unique_name(n)
+                self.add_item(n, it_data["text"], it_data.get("icon") or None)
+                idx = min(idx, len(self._names))
+                # move to drop position
                 self._names.remove(n)
-        self._names[idx:idx] = names
+                if idx > len(self._names):
+                    idx = len(self._names)
+                self._names.insert(idx, n)
+            self._rebuild()
+            self._selected = set()
+            self._update_selection()
+            self.selection_changed.emit(list(self._selected))
 
-        self._rebuild()
-        self._selected = set(names)
-        self._update_selection()
-
-        for n in names:
-            self.item_moved.emit(n, self._names.index(n))
-        self.selection_changed.emit(list(self._selected))
-        event.acceptProposedAction()
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+        self._drag_data = None
 
     def _drop_index(self, local: QPoint) -> int:
         best = 0
@@ -454,17 +561,16 @@ class DragBar(QWidget):
                 best = i
         return best
 
+    # ── rebuild layout ──────────────────────────────────────────────────
+
     def _rebuild(self):
-        # remove all widgets from flow layout
         for w in list(self._widgets.values()):
             idx = self._flow.indexOf(w)
             if idx >= 0:
                 self._flow.takeAt(idx)
-                w.setParent(self._flow_widget)  # keep alive
-        # re-add in new order
+                w.setParent(self._flow_widget)
         for n in self._names:
             self._flow.addWidget(self._widgets[n])
-        # ensure trash is last
         tidx = self._flow.indexOf(self._trash)
         if tidx >= 0:
             self._flow.takeAt(tidx)
@@ -479,3 +585,47 @@ class DragBar(QWidget):
                 self.item_removed.emit(n)
         self._selected = {n for n in self._selected if n in self._widgets}
         self.selection_changed.emit(list(self._selected))
+
+    # ── helpers ─────────────────────────────────────────────────────────
+
+    def _unique_name(self, base: str) -> str:
+        i = 1
+        while f"{base}_{i}" in self._widgets:
+            i += 1
+        return f"{base}_{i}"
+
+    # ── empty-area mouse: rubber band or deselect ───────────────────────
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self._rubber_origin = event.position().toPoint()  # DragBar coords
+            self._rubber_rect = None
+            self.deselect_all()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and hasattr(self, "_rubber_origin"):
+            d = (event.position().toPoint() - self._rubber_origin).manhattanLength()
+            if d > QApplication.startDragDistance():
+                origin_flow = self._flow_widget.mapFrom(self, self._rubber_origin)
+                pos_flow = self._flow_widget.mapFrom(self, event.position().toPoint())
+                self._rubber_rect = QRect(origin_flow, pos_flow).normalized()
+                self._flow_widget.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._rubber_rect is not None:
+            sel = set()
+            for n, w in self._widgets.items():
+                if self._rubber_rect.intersects(w.geometry()):
+                    sel.add(n)
+            if sel:
+                self._selected = sel
+                self._update_selection()
+                self.selection_changed.emit(list(self._selected))
+            self._rubber_rect = None
+            self._flow_widget.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
