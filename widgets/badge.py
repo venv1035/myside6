@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractItemModel, QEvent, QObject, QPoint, Qt, Signal
+from PySide6.QtCore import QAbstractItemModel, QEvent, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -14,26 +14,36 @@ class Badge(QWidget):
     The badge is **not** parented to the target — it is parented to the nearest
     top-level window so it is never clipped by the target's bounds.
 
+    .. note::
+
+       All badge instances are auto-polled by a 300 ms timer tied to the
+       Qt event loop, so binding to a plain ``list`` / ``dict`` / ``str`` /
+       ``callable`` will **just work** — no manual ``refresh()`` calls needed.
+
     Usage::
 
         badge = Badge(target=button, color="#ea4335")
         badge.set_count(5)
 
-        # Auto-track a model
+        # Auto-track a QAbstractItemModel (via Qt signals)
         badge.bind(table.sourceModel())
 
-        # Auto-track a list / dict via wrappers
-        items = BadgeList(["a", "b", "c"])
-        Badge(target=btn).bind(items)
-        items.append("d")    # badge auto 4
+        # Bind to a plain list — auto-polled by the internal timer
+        items = ["a", "b", "c"]
+        Badge(target=btn).bind(items)      # → 3
+        items.append("d")                  # → 4  (within ~300 ms)
 
-        scores = BadgeDict({"alice": 90})
-        Badge(target=btn).bind(scores)
-        scores["bob"] = 85   # badge auto 2
+        # Bind to a dict / string / callable — same automatic polling
+        Badge(target=btn).bind({"a": 1})   # → 1
+        Badge(target=btn).bind("hello")    # → 5
+        Badge(target=btn).bind(counter_fn) # calls counter_fn()
 
-        # Chained in constructor
-        Badge(target=btn).bind(table.sourceModel())
+        # Chained
+        Badge(target=btn).bind(my_list)
     """
+
+    _instances: set[Badge] = set()
+    _timer: QTimer | None = None
 
     def __init__(self, target: QWidget | None = None,
                  *, color: str = "#ea4335",
@@ -54,6 +64,11 @@ class Badge(QWidget):
 
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setVisible(False)
+
+        # Register so the polling timer picks us up.
+        Badge._instances.add(self)
+        self.destroyed.connect(lambda: Badge._instances.discard(self))
+        Badge._ensure_timer()
 
         if target is not None:
             target.installEventFilter(self)
@@ -87,22 +102,15 @@ class Badge(QWidget):
     def bind(self, source) -> Badge:
         """Bind the badge count to *source*. Returns ``self`` for chaining.
 
-        =======================  ============================================
-        ``source`` type          Behaviour
-        =======================  ============================================
-        ``QAbstractItemModel``   Auto-track ``rowCount()`` via ``rowsInserted`` /
-                                 ``rowsRemoved`` / ``modelReset`` signals.
-        ``BadgeList``            Auto-track ``len()`` via ``changed`` signal.
-        ---                      (see :class:`BadgeList`)
-        ``BadgeDict``            Auto-track ``len()`` via ``changed`` signal.
-        ---                      (see :class:`BadgeDict`)
-        Any object with a        Auto-track via ``changed`` signal.
+        ======================  =============================================
+        ``source`` type         Behaviour
+        ======================  =============================================
+        ``QAbstractItemModel``  Auto-track ``rowCount()`` via Qt signals.
+        Any object with a       Auto-track via ``changed`` signal.
         ``changed`` signal
-        ``list``, ``str`` …      Static ``len(source)`` (no auto-update — call
-                                 :meth:`refresh` after mutating).
-        ``callable``             ``source()`` is called each sync (trigger via
-                                 :meth:`refresh`).
-        =======================  ============================================
+        ``list``, ``dict``,     No signals — the internal polling timer
+        ``str``, ``callable``…  re-reads every ~300 ms automatically.
+        ======================  =============================================
         """
         self._unbind()
         self._source = source
@@ -119,12 +127,22 @@ class Badge(QWidget):
         return self
 
     def refresh(self) -> None:
-        """Re-read the bound source and update the badge count.
-
-        Useful when the source is a plain ``list`` / ``dict`` / ``str``
-        that was mutated externally (no signals to auto-track).
-        """
+        """Immediately re-read the bound source and update the badge count."""
         self._sync()
+
+    # ---- class-level polling ----------------------------------------------
+
+    @classmethod
+    def _ensure_timer(cls) -> None:
+        if cls._timer is None:
+            cls._timer = QTimer()
+            cls._timer.timeout.connect(cls._poll_all)
+            cls._timer.start(300)
+
+    @classmethod
+    def _poll_all(cls) -> None:
+        for badge in list(cls._instances):
+            badge._sync()
 
     # ---- internal ---------------------------------------------------------
 
@@ -149,14 +167,21 @@ class Badge(QWidget):
         src = self._source
         if src is None:
             return
+        new = self._read_count(src)
+        if new != self._count:
+            self.set_count(new)
+
+    @staticmethod
+    def _read_count(src) -> int:
         if isinstance(src, QAbstractItemModel):
-            self.set_count(src.rowCount())
-        elif callable(src):
-            self.set_count(src())
-        elif hasattr(src, "__len__"):
-            self.set_count(len(src))
-        else:
-            self.set_count(0)
+            return src.rowCount()
+        if callable(src):
+            return src()
+        if isinstance(src, int):
+            return max(0, src)
+        if hasattr(src, "__len__"):
+            return len(src)
+        return 0
 
     @staticmethod
     def _find_window(w: QWidget | None) -> QWidget | None:
@@ -224,12 +249,14 @@ class Badge(QWidget):
 class BadgeList(QObject):
     """A ``list`` wrapper that emits ``changed`` on every mutation.
 
-    Use with :meth:`Badge.bind` for auto-tracking::
+    Useful when you want **instant** (rather than timer-polled) badge updates.
+    If timer-polling at ~300 ms is acceptable, a plain ``list`` works too.
+
+    Usage with :meth:`Badge.bind`::
 
         items = BadgeList(["a", "b", "c"])
         Badge(target=btn).bind(items)    # → 3
-        items.append("d")                # badge auto → 4
-        items.clear()                    # badge auto → 0 (hidden)
+        items.append("d")                # badge instant → 4
     """
 
     changed = Signal()
@@ -238,7 +265,6 @@ class BadgeList(QObject):
         super().__init__(parent)
         self._data = list(items) if items is not None else []
 
-    # ---- read interface ---------------------------------------------------
     def __len__(self) -> int:
         return len(self._data)
 
@@ -257,13 +283,25 @@ class BadgeList(QObject):
     def __bool__(self) -> bool:
         return bool(self._data)
 
+    def __iadd__(self, items):
+        self._data += list(items)
+        self.changed.emit()
+        return self
+
+    def __setitem__(self, index, value) -> None:
+        self._data[index] = value
+        self.changed.emit()
+
+    def __delitem__(self, index) -> None:
+        del self._data[index]
+        self.changed.emit()
+
     def count(self, item) -> int:
         return self._data.count(item)
 
     def index(self, item, *args) -> int:
         return self._data.index(item, *args)
 
-    # ---- mutating interface -----------------------------------------------
     def append(self, item) -> None:
         self._data.append(item)
         self.changed.emit()
@@ -297,29 +335,18 @@ class BadgeList(QObject):
         self._data.reverse()
         self.changed.emit()
 
-    def __setitem__(self, index, value) -> None:
-        self._data[index] = value
-        self.changed.emit()
-
-    def __delitem__(self, index) -> None:
-        del self._data[index]
-        self.changed.emit()
-
-    def __iadd__(self, items):
-        self._data += list(items)
-        self.changed.emit()
-        return self
-
 
 class BadgeDict(QObject):
     """A ``dict`` wrapper that emits ``changed`` on every mutation.
 
-    Use with :meth:`Badge.bind` for auto-tracking::
+    Useful when you want **instant** (rather than timer-polled) badge updates.
+    If timer-polling at ~300 ms is acceptable, a plain ``dict`` works too.
+
+    Usage with :meth:`Badge.bind`::
 
         d = BadgeDict({"alice": 90, "bob": 85})
         Badge(target=btn).bind(d)          # → 2
-        d["charlie"] = 95                  # badge auto → 3
-        d.clear()                          # badge auto → 0 (hidden)
+        d["charlie"] = 95                  # badge instant → 3
     """
 
     changed = Signal()
@@ -328,7 +355,6 @@ class BadgeDict(QObject):
         super().__init__(parent)
         self._data = dict(items) if items is not None else {}
 
-    # ---- read interface ---------------------------------------------------
     def __len__(self) -> int:
         return len(self._data)
 
@@ -344,6 +370,14 @@ class BadgeDict(QObject):
     def __repr__(self) -> str:
         return repr(self._data)
 
+    def __setitem__(self, key, value) -> None:
+        self._data[key] = value
+        self.changed.emit()
+
+    def __delitem__(self, key) -> None:
+        del self._data[key]
+        self.changed.emit()
+
     def keys(self):
         return self._data.keys()
 
@@ -355,15 +389,6 @@ class BadgeDict(QObject):
 
     def get(self, key, default=None):
         return self._data.get(key, default)
-
-    # ---- mutating interface -----------------------------------------------
-    def __setitem__(self, key, value) -> None:
-        self._data[key] = value
-        self.changed.emit()
-
-    def __delitem__(self, key) -> None:
-        del self._data[key]
-        self.changed.emit()
 
     def clear(self) -> None:
         self._data.clear()
