@@ -25,6 +25,26 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QDoubleSpinBox,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QStyle,
+    QStyleOptionViewItem,
+    QStyledItemDelegate,
+    QTableView,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -949,6 +969,11 @@ class MyTable(QTableView):
         # after the table is fully wired up — we draw our own arrow icon.
         self._header.setSortIndicatorShown(False)
 
+        # Remove the dotted focus rectangle from all items.
+        self.setItemDelegate(NoFocusDelegate(self))
+        # Clicking any cell toggles the row checkbox (when checkable_rows enabled).
+        self.clicked.connect(self._on_row_clicked)
+
         self._checkable_rows = False
         self._check_column = 0
         self._editable_columns: set[int] | None = None  # None = none, set = whitelist
@@ -978,7 +1003,6 @@ class MyTable(QTableView):
             QTableView::item { padding: 6px 8px; border: none; }
             QTableView::item:hover { background: #f1f3f4; }
             QTableView::item:selected { background: #e8f0fe; color: #1a73e8; }
-            QTableView::item:focus { outline: none; }
 
             QHeaderView::section {
                 background: #f8f9fa;
@@ -1138,6 +1162,18 @@ class MyTable(QTableView):
     # ------------------------------------------------------------------
     # checkable rows
     # ------------------------------------------------------------------
+    def _on_row_clicked(self, index: QModelIndex) -> None:
+        """Auto-toggle checkbox for the clicked row (when checkable rows enabled)."""
+        if not self._checkable_rows:
+            return
+        proxy = index.model()
+        source_model = proxy.sourceModel() if isinstance(proxy, QSortFilterProxyModel) else proxy
+        src_row = proxy.mapToSource(index).row() if isinstance(proxy, QSortFilterProxyModel) else index.row()
+        item = source_model.item(src_row, self._check_column)
+        if item is not None and (item.flags() & Qt.ItemIsUserCheckable):
+            new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+            item.setCheckState(new_state)
+
     def set_checkable_rows(self, enabled: bool, column: int = 0) -> None:
         """Show a checkbox in ``column`` of every row.
 
@@ -1312,6 +1348,14 @@ class MyTable(QTableView):
 # ---------------------------------------------------------------------------
 # Optional helper: a delegate that renders an inline "delete" button.
 # ---------------------------------------------------------------------------
+class NoFocusDelegate(QStyledItemDelegate):
+    """Delegate that suppresses the dotted focus rectangle on items."""
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        opt.state &= ~QStyle.State_HasFocus
+        super().paint(painter, opt, index)
+
+
 class ActionDelegate(QStyledItemDelegate):
     """Render a clickable button inside a cell. Used to show inline actions
     (e.g. a "delete" button) at the end of every row.
