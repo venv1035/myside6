@@ -53,6 +53,7 @@ class DragBarItem(QObject):
     或 URL (``"https://example.com/icon.png"``)。
     """
 
+    clicked = Signal(bool, bool)  # ctrl, shift
     icon_changed = Signal()
     _net: QNetworkAccessManager | None = None
 
@@ -700,6 +701,10 @@ class DragBar(QWidget):
             self._selected = {name}
 
         self._last_clicked = name
+
+        item = self._widgets.get(name)
+        if item is not None:
+            item._item.clicked.emit(ctrl, shift)
         self._update_selection()
         self.selection_changed.emit(list(self._selected))
 
