@@ -1,602 +1,406 @@
-# PySide6 现代化控件库
+# mypyside6 — 四个自绘 Qt 控件
 
-一组面向业务后台的现代化 PySide6 自定义控件。包含两个核心控件：
+PySide6 实现的四个可复用控件：**Badge**（数字角标）、**MyCombo**（多选下拉）、
+**MyTable**（带列筛选 / 勾选 / 行内操作的表）、**DragBar**（可拖拽工具栏）。
 
-- **MyTable** — Excel 风格表格：每列筛选、双箭头排序、列拖拽、行勾选、单元格编辑、行删除、行内按钮（本文档）
-- **MyCombo** — 多选下拉勾选输入框：真实可编辑、输入即过滤、三个操作按钮（全选 / 反选 / 取消）— 详见 [MY_COMBO.md](MY_COMBO.md)
+设计原则：**控件不写死任何文案 / 尺寸 / 颜色**。每个控件都有一套默认配置常量，
+在构造时用关键字参数或一个字典覆盖即可，默认外观与行为保持不变。
 
----
-
-## 1. 概览
-
-### 1.1 文件结构
+```bash
+uv run python demo.py     # 运行四个控件的演示
+```
 
 ```
-D:\Myside\
-├── widgets\
-│   ├── __init__.py                 # 公共导出: MyTable, ActionDelegate, MyCombo
-│   ├── my_table.py        # ~36 KB
-│   └── my_combo.py        # ~46 KB
-├── main.py                         # MyTable 演示窗口
-├── test_my_combo.py                # MyCombo MVP 调用脚本
+myside6/
+├── demo.py          # 演示（4 个 Tab）
+├── widgets/         # 控件本体
+│   ├── badge.py
+│   ├── my_combo.py
+│   ├── my_table.py
+│   └── drag_bar.py
 ├── pyproject.toml
-├── README.md                       # 本文件 — MyTable 文档
-└── MY_COMBO.md                     # MyCombo 专属文档
-```
-
-### 1.2 依赖
-
-- Python ≥ 3.12
-- PySide6 ≥ 6.11（已通过 `uv add PySide6` 安装）
-
-### 1.3 运行
-
-```powershell
-uv run python main.py
-```
-
-### 1.4 导入
-
-```python
-from widgets import MyTable, MyCombo, ActionDelegate
+└── uv.lock
 ```
 
 ---
 
-## 2. MyTable
+## 通用约定
 
-继承自 `QTableView`，**始终通过一个内部的 QSortFilterProxyModel 包装真实数据模型**。所有行号 API 以 *源行号*（source row）为准，避免筛选 / 排序后行号错乱。
+| 概念 | 含义 |
+| --- | --- |
+| `texts` | 所有可见文案（按钮、占位符、提示、tooltip、后缀） |
+| `metrics` | 所有尺寸（高度、宽度、内边距、图标大小、行高） |
+| `theme` / `style` | 所有颜色（背景、边框、主色、悬停色） |
 
-### 2.1 快速开始
+三者都是「默认 dict + 你的 dict」浅合并：**只传需要改的键**就行。
 
 ```python
-from PySide6.QtWidgets import QApplication
-import sys
-from widgets import MyTable
+from widgets import (
+    MyCombo, COMBO_TEXTS, COMBO_METRICS,
+    MyTable, TABLE_TEXTS, TABLE_METRICS,
+    DragBar, DRAGBAR_STYLE,
+    Badge,
+)
+```
 
-app = QApplication(sys.argv)
+```python
+# 只改一个按钮文案，其余全部保持默认
+combo = MyCombo(texts={"ok": "Apply"})
+# 只把行高改成 36
+table = MyTable(metrics={"row_height": 36})
+# 只换垃圾桶图标
+bar = DragBar(trash_icon="✖")
+```
 
-table = MyTable(skip_filter_columns=[4])  # 禁用第 4 列（操作列）的筛选入口
+---
+
+## Badge — 数字角标
+
+贴在目标控件右上角的圆形数字角标，数字宽度自适应（1 位 → 4 位）。
+
+```python
+from widgets import Badge
+
+Badge(target=btn, color="#ea4335").bind(["a", "b", "c"])   # → 3
+```
+
+### 构造参数
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `target` | `None` | 依附的控件（角标会父化到它的顶层窗口，不被裁剪） |
+| `color` | `"#ea4335"` | 背景色 |
+| `text_color` | `"#ffffff"` | 文字色 |
+| `max_count` | `999` | 超过后显示为 `999+` |
+| `min_size` | `20` | 最小直径（px） |
+| `padding` | `8` | 文字两侧留白，重新计算直径时使用 |
+| `font_size` | `None` | 像素字号，`None` 用控件默认字体 |
+| `overflow_suffix` | `"+"` | 溢出后缀，可改成 `"…"` 或 `"+"` |
+| `offset` | `(0, 0)` | 相对右上角的额外偏移 |
+| `poll_ms` | `None` | 轮询间隔；传值等价于调用 `Badge.set_poll_interval()` |
+
+### 方法
+
+| 方法 | 说明 |
+| --- | --- |
+| `bind(source)` | 绑定数据源，返回 `self` 便于链式调用 |
+| `refresh()` | 立即重新读取数据源 |
+| `set_count(n)` / `count` | 设置数字（`<=0` 时自动隐藏） |
+| `set_color(c)` / `set_text_color(c)` | 改配色 |
+| `set_max_count(n)` | 改溢出上限 |
+| `Badge.set_poll_interval(ms)` | **类方法**，调整共享轮询间隔（默认 300 ms） |
+
+`bind()` 支持的数据源：
+
+| 类型 | 行为 |
+| --- | --- |
+| `QAbstractItemModel` | 监听 `rowsInserted` / `rowsRemoved` / `modelReset`，实时更新 |
+| 带 `changed` 信号的对象 | 实时更新 |
+| `list` / `dict` / `str` / `callable` | 由轮询定时器每 ~300 ms 重读 |
+
+需要「改列表立刻刷新」时用现成的包装类型：
+
+```python
+from widgets import Badge, BadgeList, BadgeDict
+
+items = BadgeList(["a", "b"])
+Badge(target=btn).bind(items)
+items.append("c")           # 角标立即变 3
+
+d = BadgeDict({"x": 1})
+Badge(target=btn2).bind(d)
+d["y"] = 2                  # 角标立即变 2
+```
+
+> 角标由目标控件持有强引用，`Badge(target=btn).bind(items)` 这种不回存变量的写法
+> 不会被垃圾回收；控件销毁时角标一起销毁。
+
+---
+
+## MyCombo — 多选下拉
+
+可编辑的多选下拉框：主控件是真正的 `QLineEdit`，可输入、选择、复制粘贴；
+输入即过滤；下拉面板不会抢走焦点（中文输入法可正常使用）。
+
+```python
+cb = MyCombo(placeholder="选择城市...")
+cb.set_items(["北京", "上海", "广州"])
+cb.selectionChanged.connect(lambda v: print(v))
+```
+
+### 构造参数
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `parent` | `None` | 父控件 |
+| `placeholder` | `texts["placeholder"]` | 空状态提示，覆盖 `texts["placeholder"]` |
+| `theme` | `DEFAULT_THEME` | 配色字典（见下） |
+| `texts` | `DEFAULT_TEXTS` | 文案字典 |
+| `search_in_popup` | `True` | 面板内是否显示搜索框 |
+| `string_only` | `False` | 解锁输入框为自由文本模式 |
+| `columns` | `2` | 面板列数 |
+| `max_col_chars` | `20` | 单列最大字符数；`0` = 不限 |
+| `min_height` | `34` | 收起态高度 |
+| `min_width` | `200` | `sizeHint` 的宽度下限 |
+| `arrow_width` | `26` | 右侧箭头按钮宽度 |
+| `popup_min_width` | `260` | 面板宽度下限 |
+| `popup_min_height` | `240` | 面板高度下限 |
+| `list_min_height` | `180` | 列表最小高度 |
+| `list_max_height` | `320` | 列表最大高度（超出滚动） |
+| `item_min_height` | `24` | 列表行高下限 |
+| `popup_chrome` | `44` | 面板左右边框 + 内边距预算（算列宽用） |
+| `separator` | `texts["separator"]` | 已选标签的连接符，默认 `", "` |
+
+### `texts` 键
+
+| 键 | 默认 |
+| --- | --- |
+| `placeholder` | `请选择...` |
+| `search_placeholder` | `搜索...` |
+| `sort_asc` / `sort_desc` | `↑ 升序` / `↓ 降序` |
+| `select_all` / `invert` / `reset` | `全选` / `反选` / `重置` |
+| `cancel` / `ok` | `取消` / `确定` |
+| `count` | `已选 {n} 项`（`{n}` 会被替换） |
+| `hover_only` / `hover_only_tip` | `仅筛此项` / `把筛选替换为只看这一项` |
+| `separator` | `, ` |
+
+### 主题
+
+`DEFAULT_THEME` / `GOOGLE_THEME` / `TENCENT_THEME` / `GITHUB_THEME`，
+也可用 `THEMES["github"]` 取。全部是完整字典，取一份改单个键即可。
+
+```python
+from widgets import THEMES
+
+cb.set_theme({**THEMES["tencent"], "border_radius": 8})
+```
+
+主要键：`background`、`text_color`、`border_color`、`border_color_focus`、
+`border_width`、`border_radius`、`underline_color(_focus)`、`underline_width`、
+`arrow_color(_hover)`、`selection_bg`、`font_size`、`padding`、
+`popup_background`、`popup_border_color`、`popup_border_radius`、
+`list_background`、`list_border_color`、`list_border_radius`、`list_font_size`、
+`list_item_padding`、`list_item_hover_bg`、`list_item_selected_bg/fg`、
+`btn_background`、`btn_hover_bg`、`btn_border_color`、`btn_border_radius`、
+`btn_padding`、`btn_font_size`、`btn_primary_bg`、`btn_primary_hover_bg`、
+`btn_primary_color`、`btn_primary_border`、`btn_hint_color`、
+`search_background`、`search_border_color`、`search_border_focus`、
+`search_border_radius`、`search_padding`、`search_height`。
+
+### 方法
+
+| 方法 | 说明 |
+| --- | --- |
+| `set_items(iterable)` | 元素可为 `label` 或 `(label, value)` |
+| `set_dict_items(d, swap=False)` | 默认 `value` 做标签、`key` 做值；`swap=True` 反向 |
+| `items()` | 返回 `[(label, value), ...]` |
+| `selected_values()` / `selected_labels()` | 当前选中 |
+| `set_selected_values(values)` / `clear_selection()` / `select_all()` | 批量设置 |
+| `value()` | 输入框当前文本（`string_only` 模式下即用户输入） |
+| `line_edit()` | 取出内部 `QLineEdit`（可挂 validator） |
+| `show_popup()` / `hide_popup()` | 手动开关面板 |
+| `set_theme(d)` / `set_columns(n)` / `set_max_col_chars(n)` | 运行时调整 |
+| `set_search_in_popup(b)` / `is_search_in_popup()` | 面板内搜索框开关 |
+| `set_string_only(b)` / `is_string_only()` | 自由文本模式开关 |
+| `theme()` / `texts()` / `metrics()` | 返回当前配置副本 |
+
+信号：`selectionChanged(list)`、`popupShown()`、`popupHidden()`。
+
+---
+
+## MyTable — 筛选 / 勾选 / 编辑 / 删除
+
+带「Excel 式列筛选」的表格：文本勾选、数值比较（多条 AND）、日期范围三种模式；
+列头可拖拽重排、点击排序；可选行勾选、单元格编辑、行内操作按钮。
+
+```python
+from widgets import MyTable, ActionDelegate, ACTION_STYLES
+
+table = MyTable(skip_filter_columns=[6])
 table.set_data(
-    ["ID", "姓名", "部门", "城市", "操作"],
-    [
-        [1, "张伟", "研发部", "北京", ""],
-        [2, "王芳", "市场部", "上海", ""],
-        [3, "李娜", "财务部", "广州", ""],
-    ],
+    headers=["", "姓名", "部门", "城市", "年龄", "入职日期", "操作"],
+    rows=[[False, "张三", "技术", "北京", 30, "2021-03-15", ""]],
 )
-table.set_column_numeric(2, enabled=True)   # "部门" 列按数字比较(可选)
-table.set_column_numeric(3, enabled=True)   # "城市" 列按数字比较
-table.resize(700, 400)
-table.show()
-sys.exit(app.exec())
+table.set_checkable_rows(True, 0)
+table.set_editable_columns([1, 2, 3, 4, 5])
+table.set_column_numeric(4)          # 年龄列启用「按数字比较」
+
+d = ActionDelegate("删除", parent=table, style=ACTION_STYLES["delete_solid"])
+d.clicked.connect(lambda row: table.delete_rows([row]))
+table.setItemDelegateForColumn(6, d)
 ```
 
-数字列的弹窗会多一个"按数字比较"开关：勾上后列表/搜索框隐藏，出现**多个条件行**。每行 = `运算符 + 数字 + ×`，可以点"+ 添加条件"加行；所有条件用 AND 组合（要"工资在 (20000, 25000) 范围"就直接 `(>, 20000)` + `(<, 25000)`）。运算符支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种。
+### 构造参数
 
-### 2.2 API 参考
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `skip_filter_columns` | `()` | 不显示筛选图标的列（如操作列） |
+| `texts` | `DEFAULT_TEXTS` | 文案字典 |
+| `metrics` | `DEFAULT_METRICS` | 尺寸字典 |
 
-#### 构造与数据填充
+### `texts` 键
+
+筛选面板：`sort_asc` `sort_desc` `select_all` `search_placeholder` `invert`
+`reset` `cancel` `ok` `hover_only` `hover_only_tip` `blank`（空值显示，默认 `(空白)`）
+`reset_tip_text` `numeric_toggle` `add_condition` `add_condition_tip`
+`remove_condition_tip` `reset_tip_numeric` `op_eq` `op_ne` `op_gt` `op_ge` `op_lt` `op_le`
+`date_toggle` `date_hint` `ignore_sep` `ignore_sep_tip` `reset_tip_date`
+
+日期选择器：`preset_7d` `preset_30d` `preset_month` `preset_year` `preset_all`
+`prev_month_tip` `next_month_tip` `pick_year_tip` `pick_month_tip` `today` `today_tip`
+`year_placeholder` `jump` `year_hint`（含 `{min}` `{max}`）`year_data_hint`
+（含 `{lo}` `{hi}`）`unbounded` `no_range` `year_suffix` `month_suffix`
+`date_format`（默认 `yyyy-MM-dd`）`weekdays`（7 个元素的元组）
+
+表体：`delete_selected` `delete_checked`（含 `{n}`）`check_all` `uncheck_all` `clear_filters`
+
+### `metrics` 键
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `row_height` | 30 | 行高 |
+| `table_font_size` / `header_font_size` | 13 | 表体 / 表头字号 |
+| `header_pad_left` / `header_pad_right` | 10 / 42 | 表头内边距（右侧留给筛选图标） |
+| `min_section` / `default_section` | 80 / 140 | 列最小 / 默认宽度 |
+| `filter_icon_size` / `filter_margin` | 16 / 6 | 漏斗图标尺寸 / 右边距 |
+| `sort_w` / `sort_h` / `sort_gap` / `sort_text_gap` | 8 / 14 / 6 / 6 | 排序双箭头 |
+| `check_box_size` / `check_box_margin` | 14 / 8 | 表头复选框 |
+| `check_column_width` | 56 | 勾选列宽 |
+| `col_extra` / `col_min` | 30 / 120 | `set_data` 自动列宽：`内容宽 + col_extra`，不小于 `col_min` |
+| `cal_cell_w` / `cal_cell_h` / `cal_header_h` | 34 / 28 / 24 | 日历格子 / 星期行 |
+| `year_span` | 10 | 年份网格为「当前年 ± year_span」 |
+| `year_min` / `year_max` | 1900 / 2999 | 年份输入框校验范围 |
+| `year_edit_width` / `year_edit_height` | 84 / 24 | 年份输入框 |
+| `choice_min_width` | 58 | 年 / 月网格按钮最小宽 |
+| `list_min_height` / `list_max_height` / `list_min_width` | 180 / 280 / 220 | 筛选列表 |
+| `action_radius` 等 | 6 / 6 / 4 / 80 / 30 | 行内按钮默认值（见 `ActionDelegate`） |
+
+### 方法
 
 | 方法 | 说明 |
-|---|---|
-| `MyTable(parent=None)` | 构造空表 |
-| `set_data(headers: list[str], rows: list[list[Any]])` | 一次性填充表头与数据，内部建立 `QStandardItemModel` |
-| `setModel(model)` | 直接接入自定义模型（推荐 `QStandardItemModel`；其它 `QAbstractItemModel` 也可用但勾选/编辑功能依赖 `QStandardItemModel`） |
-| `sourceModel() -> QStandardItemModel \| None` | 取出**源模型**（不是 proxy） |
-| `proxyModel() -> QSortFilterProxyModel` | 取出筛选 proxy（继承自 `QSortFilterProxyModel`） |
+| --- | --- |
+| `set_data(headers, rows)` | 用 Python 数据填充（自动列宽） |
+| `setModel(m)` / `sourceModel()` / `proxyModel()` | 模型接口（自动包一层筛选代理） |
+| `append_row(values)` | 追加一行，返回源行号 |
+| `delete_rows(rows)` / `delete_selected_rows()` / `delete_checked_rows()` | 删除，返回被删的源行号 |
+| `set_checkable_rows(True, col=0)` | 该列显示复选框，表头出现「全选」 |
+| `checked_rows()` / `set_row_checked(row, b)` / `set_all_checked(b)` | 勾选状态 |
+| `set_editable_columns(True / [列] / False)` | 单元格编辑 |
+| `set_column_numeric(col, on=True)` | 该列启用数值比较模式 |
+| `clear_filters()` | 清除所有列的筛选 |
+| `set_filter_skipped_columns(cols)` | 运行时设置不显示漏斗的列 |
 
-#### 行勾选
+信号：`rowsDeleted(list)`、`rowChecked(int, bool)`、`cellEdited(int, int, object)`。
 
-| 方法 | 说明 |
-|---|---|
-| `set_checkable_rows(enabled: bool, column: int = 0)` | 启用/禁用行勾选；`column` 指定哪一列作为复选框列（该列自动跳过筛选 UI） |
-| `checked_rows() -> list[int]` | 返回当前已勾选的**源行号**列表 |
-| `set_row_checked(source_row: int, checked: bool)` | 程序化勾选/取消某一行 |
-| `set_all_checked(checked: bool)` | 全部勾选 / 全部取消 |
-
-#### 单元格编辑
-
-| 方法 | 说明 |
-|---|---|
-| `set_editable_columns(columns)` | `True` 表示所有列可编辑；列号列表表示白名单；`False` / `None` 表示禁用编辑 |
-
-编辑触发：双击 / 按 F2 / 选中后单击。勾选列与"被排除"的列自动不可编辑。
-
-#### 行删除 / 新增
-
-| 方法 | 说明 |
-|---|---|
-| `delete_rows(source_rows: Iterable[int]) -> list[int]` | 按源行号删除任意行，返回实际删除的行号（降序） |
-| `delete_selected_rows() -> list[int]` | 删除当前**视图选中**（蓝色高亮）的行 |
-| `delete_checked_rows() -> list[int]` | 删除所有勾选的行 |
-| `append_row(values: list[Any]) -> int` | 追加一行；如启用了勾选列，对应位置传 `bool` |
-
-#### 筛选
-
-| 方法 | 说明 |
-|---|---|
-| `clear_filters()` | 清除所有列的筛选（文本 + 数字），重置漏斗图标 |
-| `set_filter_skipped_columns(columns)` | 批量禁用指定列的筛选入口（漏斗图标不画、点击无响应）—— 给"操作"列这种纯 UI 列用 |
-| `set_column_numeric(column, enabled=True)` | 把某列标记为**数字列**，弹窗顶部出现"按数字比较"开关 |
-| `column_numeric_filter(column) -> list[tuple[str, float]] \| None` | 读取某列当前的数字比较 filter；`None` 表示没启用；`[(">", 20000), ("<", 25000)]` 表示 2 个条件 AND |
-
-**默认行为**：弹窗打开时所有可见项**视觉上全勾选**（看起来"全选"），但语义上是"不过滤"——只有当用户**取消勾选**某项后，"确定"才真正下发 filter。这样默认开/关筛选不会误伤行数。
-
-**数字比较**：勾上"按数字比较"开关 → 列表/搜索框隐藏，出现**条件列表**。每行 `运算符 + 数字 + ×`；点"+ 添加条件"追加行（至少保留 1 行）。所有条件用 **AND** 组合，常见用法：
-- 范围筛选：`工资 > 20000 AND < 25000`
-- 闭区间：`年龄 >= 18 AND <= 35`
-- 排除特定值：`工资 > 0 AND != 25000`
-
-运算符支持 `=`, `!=`, `>`, `>=`, `<`, `<=` 六种。proxy 内部用 `float(cell) op value` 比较，无法转成 float 的行会被**过滤掉**（而不是通过）。
-
-#### 信号
-
-| 信号 | 参数 | 触发时机 |
-|---|---|---|
-| `rowsDeleted` | `list[int]`（被删的源行号，降序） | 调用任意 `delete_*` 方法且确实删除了行 |
-| `rowChecked` | `int, bool`（源行号，是否勾选） | 单行勾选状态变化 |
-| `cellEdited` | `int, int, object`（源行号，列号，新值） | 用户编辑了一个**可编辑列**的单元格 |
-
-#### 完整示例
+### ActionDelegate（行内按钮）
 
 ```python
-from PySide6.QtCore import Qt
-from widgets import MyTable, ActionDelegate
-
-table = MyTable()
-table.set_data(
-    ["", "ID", "姓名", "部门", "操作"],
-    [[False, 1, "张伟", "研发部", ""],
-     [False, 2, "王芳", "市场部", ""]]
-)
-
-# 第 0 列勾选框
-table.set_checkable_rows(True, column=0)
-
-# 第 2、3 列可编辑（双击编辑）
-table.set_editable_columns([2, 3])
-
-# 最后一列内联"删除"按钮
-delegate = ActionDelegate("删除", parent=table)
-delegate.clicked.connect(lambda src_row: table.delete_rows([src_row]))
-table.setItemDelegateForColumn(4, delegate)
-
-# 事件回调
-table.rowChecked.connect(lambda r, c: print(f"行 {r} 勾选状态: {c}"))
-table.cellEdited.connect(lambda r, c, v: print(f"行 {r} 列 {c} 改为 {v!r}"))
-table.rowsDeleted.connect(lambda rows: print(f"删除了行: {rows}"))
-
-# 批量操作
-table.set_all_checked(True)
-table.delete_checked_rows()
+ActionDelegate(text="删除", parent=table, *,
+               style=None,          # 或 ACTION_STYLES["confirm"]
+               radius=6, margin_x=6, margin_y=4, min_width=80, min_height=30)
 ```
 
-### 2.3 ActionDelegate（行内按钮）
-
-在某一列每行渲染一个可点击的按钮。
-
-```python
-class ActionDelegate(QStyledItemDelegate):
-    clicked = Signal(int)                       # 参数: 源行号
-    def __init__(self, text: str = "删除", parent: QTableView | None = None)
-```
-
-| 参数 | 说明 |
-|---|---|
-| `text` | 按钮文字（默认"删除"） |
-| `parent` | 必须是承载表格的 `QTableView`，用于 hover 高亮 |
-
-用法：
-
-```python
-delete_btn = ActionDelegate("删除", parent=table)
-delete_btn.clicked.connect(lambda src_row: table.delete_rows([src_row]))
-table.setItemDelegateForColumn(action_column, delete_btn)
-table.setColumnWidth(action_column, 90)
-```
-
-按钮样式：圆角白底 + 红色文字 / 边框，hover 时浅红色填充。
-
-### 2.4 表头视觉规则
-
-每个表头单元从左到右最多包含 3 部分：
-
-```
-|  列名   ↕排序双箭头   漏斗   |
-```
-
-- **排序双箭头**：始终上下两个三角形并存
-  - 默认（未排序当前列）：鼠标 hover 时显示灰色双箭头
-  - 升序：上箭头变蓝，下箭头保持灰
-  - 降序：下箭头变蓝，上箭头保持灰
-- **漏斗**：
-  - 默认隐藏，鼠标 hover 表头才显示灰色描边漏斗
-  - 列已启用筛选：始终显示**蓝色实心漏斗 + 右上角红点**
-  - **被 `set_filter_skipped_columns` 禁用的列**：漏斗永远不画，鼠标 hover 也不响应——适合"操作"列（内联按钮）、"选择"列（带 checkbox）等纯 UI 列
-
-两者位置固定不重叠（排序在漏斗左侧，间隔 6 px）。如果列被 `set_filter_skipped_columns` 禁用，排序双箭头会贴右边缘显示。
-
-### 2.5 注意事项
-
-1. **行号始终是源行号**。`checked_rows()`、`delete_*`、`rowChecked` 信号等返回 / 接收的都是源模型的行索引。即使用户对视图做了排序或筛选，行号也不会变。
-2. **勾选列不可编辑、不会弹出筛选菜单**。`set_checkable_rows(True, column=0)` 会自动把第 0 列从可编辑列表和筛选 UI 中排除。
-3. **`set_data` 会替换整个模型**，并会断开旧模型的 `itemChanged` 信号；如需保留数据请改用 `setModel(your_model)`。
-4. **行内按钮的事件区域**：`ActionDelegate.editorEvent` 只在 `option.rect.contains(...)` 范围内捕获点击，按钮覆盖整个单元格；若想让按钮更小，请把列宽调小。
-5. **拖动列顺序后**，`columnCount()` 与列号 API 仍按逻辑顺序工作（与 Qt 的 `QHeaderView.swapSections` 一致）。
-6. **数字列筛选**：`set_column_numeric` 只影响**弹窗 UI**（是否显示"按数字比较"开关），不影响数据模型。proxy 内部按 `float(cell_data)` 比较；**无法转 float 的行会被过滤掉**（比如空串、非数字字符串），跟"等于"行为一致。
-7. **筛选默认"全勾选 = 不过滤"**：弹窗打开时所有项视觉全勾，但 `_on_ok` 只在用户主动**取消**过某项后才下发 `set[str]` filter。直接点"确定"会 emit `None` = 不过滤。
-8. **文本 filter 与数字 filter 在同一列上互斥**：勾上"按数字比较"并确定后，自动清掉该列的文本 filter（反之亦然）。
+`ACTION_STYLES` 预设：`delete` `confirm` `info` `warning` 及
+`delete_solid` `confirm_solid` `info_solid` `warning_solid`。
+`style` 键：`bg_normal` `bg_hover` `border` `color` `filled`。
 
 ---
 
-## 3. MyCombo
+## DragBar — 可拖拽工具栏
 
-> **MyCombo 的完整文档已拆到独立文件 [MY_COMBO.md](MY_COMBO.md)**，包含：
->
-> - 快速开始 + `set_dict_items` / `swap` 用法
-> - 完整 API 参考（构造、数据 / 选中、弹窗控制、信号）
-> - 弹窗 3 按钮（全选 / 反选 / 取消）的"作用于可见项"语义
-> - 键盘交互（任意字符 / ↓↑ / Esc / Enter）
-> - 视觉细节（2 px 焦点下划线、聚焦变蓝、已选计数）
-> - **解锁输入框 `string_only` 模式**（默认多选 + 自由编辑两用）
-> - 44-key 主题系统 + `set_theme()` 运行时切换
-> - 完整示例（含 `QCompleter`）
-> - 实现原理（类协作图、5 个关键流程）
-> - 踩坑记录（点一下就关、取消按钮歧义、`set_theme` QLayout 警告）
->
-> 跑得起来的最短调用见根目录 [`test_my_combo.py`](test_my_combo.py)（40 行的真实 GUI 窗口）。
+图标 + 文字的工具条：拖拽排序、拖到垃圾桶删除、可跨 Bar 拖放、
+Ctrl 多选 / Shift 范围选、撤销（重置）到上次 `snapshot()`。
 
-## 4. 实现原理
+```python
+from widgets import DragBar
 
-### 4.1 MyTable 类协作图
+apple = {"background": "rgba(250,250,250,0.88)",
+         "border": "1px solid rgba(200,200,205,0.5)",
+         "border_radius": 10}
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  MyTable (QTableView)           │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  _FilterHeaderView  (自定义 QHeaderView)         │   │
-│  │   • 自绘漏斗图标 (hover 显示 / active 高亮)      │   │
-│  │   • 自绘双箭头排序指示器                         │   │
-│  │   • 漏斗点击 → emit filterClicked → 弹窗         │   │
-│  └──────────────────────────────────────────────────┘   │
-│                                                         │
-│  setModel(proxy)                                        │
-│         │                                               │
-│         ▼                                               │
-│  _MultiColumnFilterProxy (QSortFilterProxyModel)        │
-│   • dict[col] -> set(allowed values)                    │
-│   • filterAcceptsRow: 多列条件 AND                      │
-│         │                                               │
-│         ▼                                               │
-│  QStandardItemModel (源数据，由 set_data 创建)           │
-└─────────────────────────────────────────────────────────┘
-
-弹出窗口（按需创建）：
-  _FilterPopup (QFrame, Qt.Popup)
-   • 升/降序按钮
-   • 搜索框（中文 IME 正常）
-   • _CheckListWidget (勾选列表)
-   • 清除筛选 / 取消 / 确定
-
-行内动作（可选）：
-  ActionDelegate (QStyledItemDelegate)
-   • paint() 绘按钮外观
-   • editorEvent() 捕获点击 → 映射 proxy→source → emit clicked(src_row)
+bar = DragBar(spacing=8, style=apple)
+bar.add_item("folder", "文件夹", "folder")     # name, text, icon
+bar.add_item("calc", "计算器", "accessories-calculator")
+bar.snapshot()                                 # 记录重置基线
+bar.item_moved.connect(lambda name, idx: print(name, idx))
 ```
 
-### 4.2 MyTable 关键流程
+`icon` 支持主题图标名、本地路径、HTTP(S) URL。
 
-#### (1) 数据流
+### 构造参数
 
-```
-QStandardItemModel ──► _MultiColumnFilterProxy ──► QTableView
-       │                       │                       │
-       │                       └ filterAcceptsRow      │
-       │                         + sort()              │
-       └── itemChanged() ──► _on_source_item_changed  ─┤
-                                                       │
-                              cellEdited / rowChecked ─┘
-```
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `fixed_length` | `None` | 固定长度（横向=宽，纵向=高） |
+| `spacing` | `6` | 图标间距 |
+| `style` | `DEFAULT_STYLE` | 完整配置字典 |
+| `closable` | `True` | 右上角显示关闭按钮 |
+| `vertical` | `False` | 纵向排列 |
+| `item_size` | `64` | 图标块边长 |
+| `icon_size` | `28` | 图标绘制尺寸 |
+| `label_font_size` | `8` | 文字字号 |
+| `trash_size` / `reset_size` | `(56, 60)` | 垃圾桶 / 重置区尺寸 |
+| `trash_icon` / `reset_icon` | `🗑` / `↺` | 两个区的图标字符 |
+| `close_text` | `×` | 关闭按钮文字 |
+| `show_trash` / `show_reset` | `True` | 是否显示这两个区 |
 
-view 永远拿 proxy；任何 `index` 都需要 `proxy.mapToSource()` 才能拿到源行号。
+### `DEFAULT_STYLE` 键
 
-#### (2) 筛选流程
+容器：`background` `border` `border_radius` `padding`
 
-```
-用户点表头漏斗
-   │
-   ▼
-_FilterHeaderView.mousePressEvent()
-   │ 判断点击位置在 icon_rect 内 + 图标可见 (hover 或 active)
-   ▼
-emit filterClicked(column, global_pos)
-   │
-   ▼
-MyTable._show_filter_menu()
-   │ 收集源模型该列的所有唯一值
-   ▼
-_FilterPopup (QFrame, Qt.Popup) 显示
-   │ 用户勾选 / 取消 / 搜索 / 升序 / 降序
-   ▼
-emit filterChanged(col, allowed_set | None)
-   │
-   ▼
-MyTable._on_filter_changed()
-   │
-   ├─► proxy.set_column_filter(col, allowed)  → invalidateFilter()
-   │
-   └─► header.set_active(col, allowed is not None)  → 漏斗变蓝+红点
-```
+图标块：`item_size` `icon_size` `icon_top` `label_top` `label_height`
+`label_font_size` `item_radius` `item_text_color` `item_icon_color`
+`item_hover_fill` `item_selected_fill` `accent` `placeholder_icon`
+`icon_font_family` `drag_gap`
 
-#### (3) 排序流程
+区域：`show_trash` `show_reset` `trash_size` `trash_icon` `trash_font_size`
+`reset_size` `reset_icon` `reset_font_size` `reset_hover_fill`
+`reset_hover_color` `zone_radius`
 
-- Qt 自带的 `setSortIndicatorShown(False)` 关闭原生指示器
-- `_FilterHeaderView.paintSection` 在每次重绘时自己画双箭头：
-  - 当前列 == `sortIndicatorSection()` → 高亮当前方向
-  - hover 但未排序 → 灰色双箭头（提示可点）
-  - 其它 → 不画
-- 点击表头列名 / 点击双箭头位置 → 走 Qt 默认的 `sectionClicked` → `sortByColumn()`
-- 点击漏斗位置 → `mousePressEvent` 内 return（不冒泡），不触发排序
+配色：`danger` `muted` `mid`
 
-#### (4) 行勾选 / 编辑 / 删除
+关闭按钮：`close_text` `close_size` `close_font_size` `close_color`
+`close_hover_color` `close_tip` `header_height`
 
-- **勾选列**：`set_checkable_rows` 调用 `_apply_flags_to_all`，给该列每个 item 加 `Qt.ItemIsUserCheckable` 并初始化为 `Qt.Unchecked`，同时把该列加进 `_skip_filter_columns`（不画漏斗）。
-- **编辑列**：`set_editable_columns` 改 `setEditTriggers`，并给目标列 item 加 `Qt.ItemIsEditable` 标志位。
-- **数据变更回调**：`QStandardItemModel.itemChanged` 信号被表统一接管 → `_on_source_item_changed`：
-  - 该 item 在勾选列 → emit `rowChecked(row, checked)`
-  - 该 item 在可编辑列 → emit `cellEdited(row, col, value)`
-- **删除**：`delete_rows` 对源行号去重 + 降序遍历 `removeRow`，避免删除时索引变化。
+### 方法
 
-### 4.3 MyCombo 实现原理
+| 方法 | 说明 |
+| --- | --- |
+| `add_item(item, text=None, icon=None)` | 追加；`item` 可传 `DragBarItem`；重名返回 `None` |
+| `insert_item(index, item, text=None, icon=None)` | 插入到指定位置 |
+| `remove_item(name)` / `clear()` | 删除 |
+| `items()` / `selected_items()` | 当前项 / 选中项名 |
+| `select_all()` / `deselect_all()` | 选择 |
+| `set_spacing(px)` / `set_style(d)` | 运行时调整，`set_style` 会立刻换肤 |
+| `snapshot()` | 记录当前项为重置基线 |
+| `reset()` | 恢复到基线 |
 
-> MyCombo 的类协作图、5 个关键流程（焦点与 IME、输入即过滤、点击外部关闭、显示/编辑模式、作用于可见项的 3 按钮）全部在 [MY_COMBO.md § 11](MY_COMBO.md#11-实现原理) 详细说明。
+信号：`item_moved(str, int)`、`item_removed(str)`、`selection_changed(list)`、`closed()`。
+
+`DragBarItem` 本身：`name`、`text`、`icon_src`、`clicked(ctrl, shift)`、`icon_changed()`。
 
 ---
 
-## 5. 已修复的 Bug 复盘（踩坑记录）
-
-按时间顺序整理，便于二次开发时避免重复踩坑。
-
-### 5.1 点击勾选框反而切换不了
-
-**现象**：`QListWidgetItem` 设了 `Qt.ItemIsUserCheckable`，但点击 indicator（小方框）后状态不变；点击文字反而能切换。
-
-**根因**：Qt 自带的"点击 indicator 切换 checkState"行为已经触发了一次切换，再加上代码里 `itemClicked.connect(...)` 又手动切换一次 → 净结果是没变化（点文字时则是只切换一次）。
-
-**修复**：
-- 移除 `itemClicked` 的手动切换
-- 自定义 `_CheckListWidget(QListWidget)`，重写 `mousePressEvent`：判断点击的 item 是否可勾选，若是则统一切换一次状态后 `event.accept()` 阻止默认行为
+## 常见改动速查
 
 ```python
-class _CheckListWidget(QListWidget):
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            item = self.itemAt(event.position().toPoint())
-            if item is not None and item.flags() & Qt.ItemIsUserCheckable:
-                new_state = (Qt.Unchecked if item.checkState() == Qt.Checked
-                             else Qt.Checked)
-                item.setCheckState(new_state)
-                event.accept()
-                return
-        super().mousePressEvent(event)
+# 全局换英文界面
+en = {
+    "ok": "OK", "cancel": "Cancel", "select_all": "Select all",
+    "invert": "Invert", "reset": "Reset", "search_placeholder": "Search...",
+}
+MyTable(texts=en)
+MyCombo(texts=en)
+
+# 更紧凑的表格
+MyTable(metrics={"row_height": 26, "default_section": 110, "col_extra": 20})
+
+# 更大的下拉行高 + 单列
+MyCombo(columns=1, item_min_height=30, list_max_height=400)
+
+# 只改角标溢出样式
+Badge(target=btn, overflow_suffix="…", max_count=9)
+
+# 极简工具条：不要垃圾桶和重置
+DragBar(show_trash=False, show_reset=False, closable=False)
 ```
-
-效果：点击行的任意位置（勾选框 / 文字 / 留白）都精确切换一次。
-
-### 5.2 表格筛选弹窗里的搜索框不能输入中文
-
-**现象**：弹出的列筛选菜单中有一个搜索框，英文能输入，中文 / 日文 / 韩文输入法完全没反应。
-
-**根因**：原来弹窗用 `QMenu` 实现，`QMenu` 自身会拦截 IME 事件以做菜单导航（按字母跳到匹配项），导致 IME 组合事件无法到达搜索框。
-
-**修复**：放弃 `QMenu`，改用 `QFrame(parent, Qt.Popup)`（保留 popup 行为：点击外部自动关闭），中文输入法立刻正常。
-
-### 5.3 排序指示器与漏斗图标位置重叠
-
-**现象**：表头右侧 Qt 自带的排序三角和我们自绘的漏斗叠在一起，互相挡。
-
-**修复**：
-- `setSortIndicatorShown(False)` 关掉原生指示器
-- 在 `paintSection()` 中自绘"上下双箭头" SVG（活跃方向蓝色）
-- 用一组几何常量 `FILTER_SIZE / FILTER_MARGIN / SORT_W / SORT_GAP` 严格约束位置：排序在漏斗左侧固定 6 px 间隔，永不重叠
-- 表头 stylesheet `padding-right: 42px` 给两个图标留够空间
-- 用单测断言：`for col in range(N): sort.right() <= filter.left()`
-
-### 5.4 漏斗一直显示太喧闹
-
-**现象**：每一列表头都常驻一个漏斗图标，视觉噪声大。
-
-**修复**：在 `_FilterHeaderView` 引入 `_hover_section`，`mouseMoveEvent` 跟踪当前 hover 列、`leaveEvent` 复位。`paintSection` 改为：
-
-```python
-if not active and not hover:
-    return       # 默认完全不画
-```
-
-只在 hover 该列或该列已有筛选时才画漏斗。`mousePressEvent` 也只在图标可见时才响应点击，避免点不到的位置触发筛选。
-
-### 5.5 多选下拉点一次勾选就关闭面板（**最严重**）
-
-> 已迁到 [MY_COMBO.md § 12.1](MY_COMBO.md#121-多选下拉点一次勾选就关闭面板最严重)：FocusOut 关闭逻辑 + `Qt.Tool` 窗口 DPI 误判两个根因 + 改用 widget 父链判断的修复代码。
-
-### 5.6 弹窗"取消"按钮语义歧义
-
-> 已迁到 [MY_COMBO.md § 12.2](MY_COMBO.md#122-弹窗取消按钮语义歧义)：原"取消"按钮同时清除勾选+关面板，拆成"全选/反选/取消"三按钮单一职责。
-
-### 5.7 `set_theme()` 触发 `QLayout` 警告
-
-> 已迁到 [MY_COMBO.md § 12.3](MY_COMBO.md#123-set_theme-触发-qlayout-警告)：`_apply_style()` 同时跑 stylesheet 和 widget tree 导致 `set_theme()` 二次添加布局；拆为 `_apply_style()` (stylesheet only) + `_build_widgets()` (once) 修复。
-
-### 5.8 输入框焦点位置不明显
-
-**现象**：用户分不清主输入框在哪、是否聚焦。
-
-**修复**：给 `QLineEdit` 加 2 px 底部边框：默认浅灰、聚焦变蓝；同时保留外层圆角边框聚焦时变蓝，形成双重焦点提示。两种状态都用 2 px（不变），避免聚焦时文字位置抖动 1 px。
-
-### 5.9 筛选默认"全勾选"应该是"不过滤"
-
-**v1 错误方案（已废弃）**：引入 `_unfiltered: bool` 状态，弹窗打开时所有项视觉上已勾选但 flag 标记"未筛选"；用户取消勾选 → flag 翻 False → 真正的 filter 激活。
-
-**问题**：
-- 视觉状态 ≠ 实际状态，**用户认知负担大**：明明看到"全勾"却要点"确定"才生效，第一次用必然困惑。
-- 弹窗打开后用户顺手再点"全选"试图"反选"（清空），得到的是空 selection + `_unfiltered=False` → 走 `set()` 分支 → 表格 0 行。**没达到"反选"预期，反而清空了表格。**
-- Excel / Outlook / 大多数表格控件的 filter 弹窗默认就是"全不勾选"，用户主动勾选要保留的值——这才符合"点什么是筛选什么"的操作直觉。
-
-**v2 正确方案（Excel-like，零心智负担）**：
-- 删除 `_unfiltered` flag。**弹窗打开默认全部 Unchecked**（除非有 prior filter 还原）。
-- `确定` 按钮语义改写：
-  - 空 selection → `filterChanged.emit(column, None)` = 不过滤 = 显示全部
-  - 非空 selection → `filterChanged.emit(column, set(_selected))` = 只保留勾选项
-- "全选" `QCheckBox` 改为 tristate toggle（Unchecked/PartiallyChecked/Checked）：
-  - 第一次点（Unchecked）→ Checked（全勾）
-  - 第二次点（Checked）→ Unchecked（全不勾 = "反选效果"）
-  - 部分勾时点 → Checked（全勾）
-- "清除筛选" 按钮保留——显式清掉所有列的 filter（含 numeric）。
-- 视觉验证（截图为证）：
-  - 首次打开（无 prior）：5 个城市全 Unchecked，"全选"是 Unchecked
-  - 点"全选" 1 次：5 个全 Checked，"全选"是 Checked
-  - 点"全选" 2 次：5 个全 Unchecked，"全选"是 Unchecked ← "反选效果"
-  - reopen with prior `{"北京","上海"}`：前 2 个 Checked，后 3 个 Unchecked，"全选"是 PartiallyChecked
-
-**二次修复 — 真实 click 路径下第二次 click 无效**：
-
-v2 第一版用 `if self._select_all.checkState() == Qt.Checked: state = Unchecked else: state = Checked` 决定 toggle 方向。看起来对，但用 `QTest.mouseClick` 真实点击复测时第二次 click 无任何反应（5/5 item 保持 Checked）。
-
-根因：`QCheckBox.setTristate(True)` 内部有 3-state cycle（Unchecked → PartiallyChecked → Checked → Unchecked），我们在 handler 里又 `setCheckState(state)` 显式覆盖状态，**把 Qt 的 "next click" 状态机搞乱**——Qt 下一次 click 时基于混乱状态做 cycle，结果状态没变、clicked 信号仍发、handler 跑、但 list 不动。
-
-修复：不再依赖 `self._select_all.checkState()`，**直接看 list 的实际状态**：
-```python
-n = self._list.count()
-all_checked = n > 0 and all(
-    self._list.item(i).checkState() == Qt.Checked for i in range(n)
-)
-state = Qt.Unchecked if all_checked else Qt.Checked
-```
-
-这样无论 Qt 怎么改 QCheckBox 自己的 state，都以 list 数据为准。复测 `QTest.mouseClick` × 3 + 4 个场景（空/prior/partial/search）全部 PASS。
-
-**三次修复 — 弹窗内「升序/降序」原本是关面板 + 对主表格排序**：
-
-旧实现：弹窗的「↑ 升序」「↓ 降序」按钮调 `_emit_sort(order)`，emit `sortRequested(col, order)` 信号 → `MyTable._on_sort_requested` 调 `self.sortByColumn(col, order)` → **关掉弹窗、对主表格排序**。
-
-问题：主表格的列排序**早就有自己的 UI**（表头的双箭头 `_FilterHeaderView`），弹窗里再放一对"全局排序"按钮是冗余且反直觉的——用户预期弹窗内的排序只对**弹窗内可见项**生效，方便在长列表里翻找。
-
-修复：把 `_emit_sort` 改成 `_on_popup_sort`，**只重排弹窗内 `_list` 的 item**：
-```python
-def _on_popup_sort(self, order: Qt.SortOrder) -> None:
-    n = self._list.count()
-    if n <= 1: return  # 空 / 1 项：忽略
-    items = [...]  # 收集 (display, value, checked)
-    reverse = (order == Qt.DescendingOrder)
-    empties = [x for x in items if x["display"] == "(空白)"]
-    non_empty = [x for x in items if x["display"] != "(空白)"]
-    non_empty.sort(key=lambda x: x["display"].lower(), reverse=reverse)
-    items = non_empty + empties  # "(空白)" 始终在末尾
-    # ... 重新写回 _list
-```
-
-同时清理 dead code：
-- 删除 `sortRequested` 信号（外部无消费者）
-- 删除 `MyTable._on_sort_requested` handler 和 `popup.sortRequested.connect(...)`
-
-排序规则：
-- 按 `display.lower()` 字典序（中文按 Unicode 码点，英文大小写不敏感）
-- **"(空白)" 永远在末尾**，升降都不会跟其他项混淆
-- **不关弹窗**——用户可以连续点升降对比
-- **不影响主表格列排序**——主表格用表头双箭头
-
-`QTest.mouseClick` × 7 场景 PASS：基础升降、空列表、1 项、含 "(空白)"、check 状态保留、MyTable 集成（主表格 `sortByColumn` 0 次调用）。
-
-**v3 — 弹窗功能统一：MyCombo 加升序/降序、全选 toggle、hover「仅筛此项」；MyTable filter 加反选/重置、hover「仅筛此项」**：
-
-5.9 v2 之后，弹窗之间功能不同步：
-- MyCombo 有 `全选 / 反选 / 重置` 三个按钮，但**没有**升序/降序，`全选` 是"一次全勾"不会"二次反选"
-- MyTable filter 有 `升序 / 降序` 和 `(全选)` tristate checkbox，但**没有**反选/重置按钮
-
-v3 统一两者，**所有弹窗**共享：
-- `升序 / 降序`：弹窗内可见项重排（5.9 v2 修复）
-- `全选`：**toggle** —— 1 次点 check-all, 2 次点 uncheck-all (反选效果)
-- `反选`：翻转可见项的勾选
-- `重置`：取消所有勾选（不关弹窗）
-- `确定` / `取消`：MyTable filter 专用（MyCombo 是即时生效）
-- `仅筛此项` (hover overlay)：鼠标悬停某项时弹出一个蓝色按钮，点击**直接把筛选替换为只看这一项 + 自动关弹窗**
-
-实现细节：
-- **MyCombo** 加 升序/降序 sort row (按 `display.lower()` 排序，**保留勾选状态**；用 `takeItem` 顺序拆 item 避免 index 错位)；全选按钮改为 toggle (看 list 实际状态而不是按钮自己)；新增 `filterOnlyThis(object)` 信号 + `_on_filter_only_this` handler → 替换 selection 为 `[value]` + 关弹窗
-- **MyTable filter** 加 反选 / 重置 按钮（重置 = 仅取消勾选，不关弹窗，**不 emit** `filterChanged`）; 新增 `filterOnlyThis(int, object)` 信号 + `_on_filter_only_this` handler → `set_column_filter(col, {value})` + `set_active(col, True)` + 弹窗 self-close
-- **hover overlay**: `_FilterPopup` / `_MultiSelectPopup` 各持有 1 个 `QToolButton("仅筛此项", #HoverOnly)`，监听 `QListWidget.itemEntered` 重新定位，监听 `viewport().Leave` + 自身 `hideEvent` 隐藏。点击 → emit `filterOnlyThis` → owner 处理 + 弹窗自关
-
-5.9 v3 测试 (4 + 6 场景全 PASS):
-- MyCombo: sort 升降 / 全选 toggle (3 state) / 全选 partial→all / hover 单项 emit / hover 隐藏 (搜索后) / sort 保留勾选
-- MyTable filter: 反选 / 重置 (不关) / hover 单项 emit / self-close / MyTable 集成 (col_filter 应用 + visible row 数变化) / 反选+重置+全选 互不冲突
-
-视觉: 7 张 PNG 截图确认布局 (升序/降序/全选/反选/重置/hover 按钮位置/确定 蓝色 primary)。
-
-### 5.10 数字列需要"按数字比较"开关
-
-**现象**：工资 / 年龄这种数字列，列表里有 30, 35, 41... 多选时只能 `set = {30, 35}` 这种枚举式筛选，要找"年龄 > 30 的所有员工"做不了。
-
-**修复**：
-- `MyTable.set_column_numeric(column, enabled=True)` 标记列
-- `MyTable.__init__(skip_filter_columns=[...])` 在构造时禁用不需要筛选的列
-- `_FilterPopup` 加"按数字比较" `QCheckBox` —— 勾上后列表/搜索框 `hide()`，显示"运算符 `QComboBox` + 数字 `QDoubleSpinBox`"
-- `_MultiColumnFilterProxy` 加 `set_column_numeric_filter(column, op, value)` —— 6 个 op：=, !=, >, >=, <, <=；非 float 行被过滤掉
-- 文本 filter 和数字 filter 同一列互斥 —— 选数字模式时自动清掉文本 filter，反之亦然
-
-### 5.11 数字列需要"多条件 AND"范围筛选
-
-**现象**：单 op+value 满足不了"工资 > 20000 且 < 25000"这种范围筛选；用户只能要么 `> 20000`（把 25500 也带进来），要么 `< 25000`（把 13500 也带进来），或者放弃数字 filter 改回多选枚举。
-
-**修复**：
-- 数据：`proxy.set_column_numeric_filter(column, conditions)` 接受 `list[tuple[str, float]]`；多个条件按 **AND** 组合
-- UI：抽出 `_NumericConditionRow` 内部类，封装 `QComboBox + QDoubleSpinBox + QToolButton(×)`
-- popup 用动态 `QVBoxLayout` 装多个 row + 一个"+ 添加条件"按钮；至少保留 1 行（删到 1 行时不删而是 reset 为默认值）
-- 打开 popup 时从 `numeric_filter` 恢复所有行；初始空则放 1 个 `("=", 0.0)` 默认行
-- 信号 `numericFilterChanged` 从 `(column, op, value)` 改成 `(column, list|None)`，传 `None` 表示清空
-- `MyTable.column_numeric_filter` 返回 `list | None`（之前是单 tuple — 内部 API breaking，但项目里没消费者）
-
-### 5.12 表头上下箭头跟漏斗重叠 / 出现两列上下箭头
-
-**现象**：表头里**同一列**上能看到 2 个上下箭头 —— 一个是 Qt 默认的 sort indicator，另一个是我们 `_FilterHeaderView.paintSection` 自绘的双箭头；两个叠加在一起。同时排序列的 sort indicator 又跟 hover 列的漏斗离得很近，看着像重叠。
-
-**根因**：
-- `_FilterHeaderView.__init__` 调了 `self.setSortIndicatorShown(False)` 关掉 Qt 默认 sort indicator
-- 但 `QTableView.setHorizontalHeader(header)` 和 `QTableView.setSortingEnabled(True)` **会重置**该 flag 回 `True`
-- 之后 `super().paintSection(...)` 仍然画原生 sort indicator，**叠加**在我们自绘双箭头上 = 视觉上"两列上下箭头"
-
-**修复**：在 `MyTable.__init__` 末尾，**所有** `setHorizontalHeader / setSortingEnabled / setSelectionBehavior / setEditTriggers / ...` 都完成**之后**，再调一次 `self._header.setSortIndicatorShown(False)`，确保最终状态正确。
-
-```python
-self.setSortingEnabled(True)
-self.setAlternatingRowColors(True)
-self.setSelectionBehavior(QAbstractItemView.SelectRows)
-...
-# 关键: 必须在 setHorizontalHeader / setSortingEnabled 之后再次关闭
-self._header.setSortIndicatorShown(False)
-```
-
-视觉验证（`_FilterHeaderView` 的 paintSection 仍保留）：
-- 排序列：1 个自绘双箭头（升序上蓝下灰，降序上灰下蓝）
-- hover 列：1 个灰色双箭头 + 灰色漏斗，6 px 间距不重叠
-- skip 列：排序箭头贴右边缘，无漏斗
-
----
-
-## 附：开发与测试
-
-烟雾测试可以在无显示环境下跑（CI 友好）：
-
-```powershell
-$env:QT_QPA_PLATFORM = "minimal"
-uv run python -c "from main import DemoWindow; from PySide6.QtWidgets import QApplication; from PySide6.QtCore import QTimer; import sys; app = QApplication(sys.argv); w = DemoWindow(); w.show(); QTimer.singleShot(150, app.quit); sys.exit(app.exec())"
-```
-
-完整可视化运行：
-
-| 控件 | 命令 |
-|---|---|
-| **MyTable** | `uv run python main.py` |
-| **MyCombo** | `uv run python test_my_combo.py` |
-
-

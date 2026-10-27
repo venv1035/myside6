@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QListView,
     QPushButton,
     QSizePolicy,
     QStyle,
@@ -211,6 +212,41 @@ THEMES: dict[str, dict] = {
 }
 
 
+# --------------------------------------------------------------------------
+# Every user-visible string lives here so callers can reword / localise the
+# widget without editing the source:  ``MyCombo(texts={"ok": "Apply"})``.
+# --------------------------------------------------------------------------
+DEFAULT_TEXTS: dict[str, object] = {
+    "placeholder":        "请选择...",
+    "search_placeholder": "搜索...",
+    "sort_asc":           "\u2191 升序",
+    "sort_desc":          "\u2193 降序",
+    "select_all":         "全选",
+    "invert":             "反选",
+    "reset":              "重置",
+    "cancel":             "取消",
+    "ok":                 "确定",
+    "count":              "已选 {n} 项",
+    "hover_only":         "仅筛此项",
+    "hover_only_tip":     "把筛选替换为只看这一项",
+    "separator":          ", ",
+}
+
+# Default geometry of the drop-down / list.  Overridable through
+# ``MyCombo(list_min_height=..., popup_min_width=...)``.
+DEFAULT_METRICS: dict[str, int] = {
+    "min_height":        34,   # height of the closed combo
+    "min_width":         200,   # sizeHint floor
+    "arrow_width":       26,   # dropdown arrow button
+    "popup_min_width":   260,   # drop-down never narrower than this
+    "popup_min_height":  240,   # ... nor shorter than this
+    "list_min_height":   180,
+    "list_max_height":   320,
+    "item_min_height":   24,
+    "popup_chrome":      44,   # horizontal frame/padding inside the popup
+}
+
+
 class _MultiSelectPopup(QFrame):
     """Drop-down list shown by :class:`MyCombo`.
 
@@ -227,12 +263,21 @@ class _MultiSelectPopup(QFrame):
 
     def __init__(self, parent: QWidget | None = None,
                  theme: dict | None = None,
+                 texts: dict | None = None,
                  search_in_popup: bool = True,
-                 string_only: bool = False) -> None:
+                 columns: int = 1,
+                 max_col_chars: int = 20,
+                 list_min_height: int = 180,
+                 list_max_height: int = 320,
+                 item_min_height: int = 24,
+                 popup_chrome: int = 44) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
                          | Qt.NoDropShadowWindowHint)
         self._owner = parent
         self._theme: dict = dict(theme) if theme else dict(DEFAULT_THEME)
+        self._texts: dict = dict(DEFAULT_TEXTS)
+        if texts:
+            self._texts.update(texts)
         self.setObjectName("MultiSelectPopup")
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
@@ -240,12 +285,20 @@ class _MultiSelectPopup(QFrame):
         self.setFrameShape(QFrame.NoFrame)
         self.setMouseTracking(True)
         self._search_in_popup = search_in_popup
-        self._string_only = string_only
+        self._columns = max(1, int(columns))
+        self._effective_columns = self._columns
+        self._max_col_chars = max(0, int(max_col_chars))   # 0 = unlimited
+        self._list_min_height = int(list_min_height)
+        self._list_max_height = int(list_max_height)
+        self._item_min_height = int(item_min_height)
+        self._chrome = int(popup_chrome)
+        self._cell = QSize()          # per-item cell size in wrapping mode
         self._snapshot: list[Qt.CheckState] | None = None
         self._ok_clicked: bool = False
 
         self._apply_style()
         self._build_widgets()
+        self._set_columns(self._columns)
 
     def _apply_style(self) -> None:
         t = self._theme
@@ -309,6 +362,10 @@ class _MultiSelectPopup(QFrame):
                 background: {t['btn_primary_hover_bg']};
             }}
         """)
+        # Font / padding may have changed -- re-measure the item cells so no
+        # label is ever elided.  Skipped during __init__ (list not built yet).
+        if hasattr(self, "_list"):
+            self._apply_column_layout()
 
     def _build_widgets(self) -> None:
         """Build the popup's child widget tree. Called once from __init__.
@@ -324,10 +381,11 @@ class _MultiSelectPopup(QFrame):
         outer.setSpacing(6)
 
         # -- sort row (升序 / 降序) ---------------------------------------
+        t = self._texts
         sort_row = QHBoxLayout()
         sort_row.setSpacing(4)
-        self._sort_asc_btn = QPushButton("\u2191 升序", self)
-        self._sort_desc_btn = QPushButton("\u2193 降序", self)
+        self._sort_asc_btn = QPushButton(t["sort_asc"], self)
+        self._sort_desc_btn = QPushButton(t["sort_desc"], self)
         sort_row.addWidget(self._sort_asc_btn)
         sort_row.addWidget(self._sort_desc_btn)
         sort_row.addStretch(1)
@@ -339,7 +397,7 @@ class _MultiSelectPopup(QFrame):
         # the search box.  Its tristate visual (Unchecked / Partially
         # Checked / Checked) gives the user immediate feedback on the
         # current selection state.
-        self._select_all_cb = QCheckBox("全选", self)
+        self._select_all_cb = QCheckBox(str(t["select_all"]), self)
         self._select_all_cb.setTristate(True)
         outer.addWidget(self._select_all_cb)
 
@@ -348,18 +406,19 @@ class _MultiSelectPopup(QFrame):
         btn_row = QHBoxLayout(self._btn_row_widget)
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(4)
-        self._invert_btn = QPushButton("反选", self._btn_row_widget)
-        self._clear_btn = QPushButton("重置", self._btn_row_widget)
+        self._invert_btn = QPushButton(str(t["invert"]), self._btn_row_widget)
+        self._clear_btn = QPushButton(str(t["reset"]), self._btn_row_widget)
         btn_row.addWidget(self._invert_btn)
         btn_row.addWidget(self._clear_btn)
         btn_row.addStretch(1)
-        self._count_label = QPushButton("已选 0 项", self._btn_row_widget)
+        self._count_label = QPushButton(str(t["count"]).format(n=0),
+                                        self._btn_row_widget)
         self._count_label.setObjectName("hint")
         self._count_label.setEnabled(False)
         btn_row.addWidget(self._count_label)
         btn_row.addSpacing(8)
-        self._cancel_btn = QPushButton("取消", self._btn_row_widget)
-        self._ok_btn = QPushButton("确定", self._btn_row_widget)
+        self._cancel_btn = QPushButton(str(t["cancel"]), self._btn_row_widget)
+        self._ok_btn = QPushButton(str(t["ok"]), self._btn_row_widget)
         self._ok_btn.setObjectName("primary")
         btn_row.addWidget(self._cancel_btn)
         btn_row.addWidget(self._ok_btn)
@@ -367,7 +426,7 @@ class _MultiSelectPopup(QFrame):
         # -- search box (optional) ----------------------------------------
         self._search_edit = QLineEdit(self)
         self._search_edit.setObjectName("PopupSearch")
-        self._search_edit.setPlaceholderText("搜索...")
+        self._search_edit.setPlaceholderText(str(t["search_placeholder"]))
         self._search_edit.setClearButtonEnabled(True)
         # Accept click-focus only: typing into the main line edit is still
         # the primary way to filter, but the user can also click here when
@@ -379,8 +438,8 @@ class _MultiSelectPopup(QFrame):
 
         self._list = _CheckListWidget(self)
         self._list.setSelectionMode(QAbstractItemView.NoSelection)
-        self._list.setMinimumHeight(180)
-        self._list.setMaximumHeight(320)
+        self._list.setMinimumHeight(self._list_min_height)
+        self._list.setMaximumHeight(self._list_max_height)
         self._list.setUniformItemSizes(True)
         self._list.setMouseTracking(True)
 
@@ -407,10 +466,10 @@ class _MultiSelectPopup(QFrame):
         # NOT trigger viewport Leave (which would otherwise hide the button
         # the instant the user tries to click it, causing flicker).
         self._hover_only_btn = QToolButton(self._list.viewport())
-        self._hover_only_btn.setText("仅筛此项")
+        self._hover_only_btn.setText(str(t["hover_only"]))
         self._hover_only_btn.setObjectName("HoverOnly")
         self._hover_only_btn.setCursor(Qt.PointingHandCursor)
-        self._hover_only_btn.setToolTip("把筛选替换为只看这一项")
+        self._hover_only_btn.setToolTip(str(t["hover_only_tip"]))
         self._hover_only_btn.hide()
         self._hover_only_btn.setFocusPolicy(Qt.NoFocus)
         self._hover_only_btn.clicked.connect(self._on_hover_only_clicked)
@@ -437,6 +496,9 @@ class _MultiSelectPopup(QFrame):
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
             it.setData(Qt.UserRole, value)
+            # Labels longer than ``max_col_chars`` are elided in the list,
+            # so keep the full text reachable through a tooltip.
+            it.setToolTip(label)
             self._list.addItem(it)
         self._list.blockSignals(False)
         self._update_count()
@@ -444,6 +506,145 @@ class _MultiSelectPopup(QFrame):
         self._snapshot = [self._list.item(i).checkState()
                           for i in range(self._list.count())]
         self._ok_clicked = False
+        self._apply_column_layout()
+
+    def _set_columns(self, columns: int) -> None:
+        self._columns = max(1, int(columns))
+        self._effective_columns = self._columns
+        if self._columns > 1:
+            self._list.setFlow(QListView.LeftToRight)
+            self._list.setWrapping(True)
+            self._list.setResizeMode(QListView.Adjust)
+            self._list.setSpacing(4)
+        else:
+            self._list.setFlow(QListView.TopToBottom)
+            self._list.setWrapping(False)
+            self._list.setResizeMode(QListView.Fixed)
+            self._list.setSpacing(0)
+        self._apply_column_layout()
+
+    # ---- item cell metrics ----------------------------------------------
+    # The list is laid out with *explicit per-item size hints* rather than
+    # QListView's grid size: with LeftToRight + wrapping + grid, Qt still
+    # gives every item a rect only as wide as its own text (so a checkbox
+    # eats a couple of characters and long labels collapse to "高...").
+    # Sizing the items themselves guarantees the full label is drawn, no
+    # matter how long it is.
+    def _item_padding(self) -> tuple[int, int]:
+        """Return ``(horizontal, vertical)`` padding from the theme."""
+        raw = str(self._theme.get("list_item_padding", "5px 6px")) \
+            .replace("px", " ").replace(",", " ")
+        vals: list[int] = []
+        for part in raw.split():
+            try:
+                vals.append(int(round(float(part))))
+            except ValueError:
+                continue
+        if not vals:
+            return 12, 10
+        if len(vals) == 1:                       # all sides
+            return vals[0] * 2, vals[0] * 2
+        if len(vals) == 2:                       # top/bottom  left/right
+            return vals[1] * 2, vals[0] * 2
+        if len(vals) == 3:                       # top  left/right  bottom
+            return vals[1] * 2, vals[0] + vals[2]
+        return vals[1] + vals[3], vals[0] + vals[2]
+
+    def _indicator_reserve(self) -> int:
+        """Horizontal space eaten by the check indicator + its label gap."""
+        st = self._list.style()
+        ind = st.pixelMetric(QStyle.PM_IndicatorWidth, None, self._list)
+        gap = st.pixelMetric(QStyle.PM_CheckBoxLabelSpacing, None, self._list)
+        return ind + gap
+
+    def _hover_btn_reserve(self) -> int:
+        """Space kept free on the right for the floating "仅筛此项" badge."""
+        btn = getattr(self, "_hover_only_btn", None)
+        if btn is None:
+            return 0
+        btn.ensurePolished()
+        return max(btn.width(), btn.sizeHint().width()) + 14
+
+    def _natural_cell(self) -> QSize:
+        """Smallest cell that shows the widest label in full (no elision)."""
+        fm = QFontMetrics(self._list.font())
+        widest = 0
+        for i in range(self._list.count()):
+            widest = max(widest, fm.horizontalAdvance(self._list.item(i).text()))
+        if widest <= 0:
+            widest = fm.horizontalAdvance("示例 Example")
+        # Cap the measured width at ``max_col_chars`` characters so a single
+        # very long label cannot blow the popup up to an unusable width.
+        widest = min(widest, self._char_limit_width(fm))
+        pad_h, pad_v = self._item_padding()
+        w = widest + pad_h + self._indicator_reserve() \
+            + self._hover_btn_reserve() + 8
+        h = max(fm.height() + pad_v + 6, self._item_min_height)
+        return QSize(max(w, 90), h)
+
+    def _char_limit_width(self, fm: QFontMetrics) -> int:
+        """Pixel width of ``max_col_chars`` characters (unlimited when 0)."""
+        n = self._max_col_chars
+        if n <= 0:
+            return 1 << 24
+        # Use the widest of a CJK and a Latin glyph so the cap behaves the
+        # same for Chinese labels and for all-caps English ones.
+        return max(fm.horizontalAdvance("国" * n), fm.horizontalAdvance("W" * n))
+
+    def _apply_column_layout(self) -> None:
+        """(Re)compute per-item size hints from the current labels + font."""
+        if self._columns <= 1:
+            # Single column: items span the viewport, keep native sizing.
+            self._cell = QSize()
+            self._list.setGridSize(QSize())
+            for i in range(self._list.count()):
+                self._list.item(i).setSizeHint(QSize())
+            return
+        self._effective_columns = self._columns
+        self._set_cell(self._natural_cell())
+
+    def _set_cell(self, cell: QSize) -> None:
+        # Both the grid size AND the per-item size hints have to be set:
+        # with a grid alone Qt falls back to each item's text width for the
+        # item rect (eliding the label); with hints alone the view stops
+        # wrapping. Together they give full-width cells in a wrapping grid.
+        self._cell = cell
+        self._list.setGridSize(cell)
+        for i in range(self._list.count()):
+            self._list.item(i).setSizeHint(cell)
+
+    def preferred_width(self) -> int:
+        """Width needed to show every column with full (unelided) labels."""
+        if self._columns <= 1:
+            return self._natural_cell().width() + self._chrome
+        if not self._cell.isValid():
+            self._apply_column_layout()
+        visible = sum(1 for i in range(self._list.count())
+                      if not self._list.item(i).isHidden())
+        if visible <= 0:
+            return 0
+        effective = min(self._columns, visible)
+        sp = self._list.spacing()
+        inner = self._cell.width() * effective + sp * (effective - 1)
+        return inner + self._chrome
+
+    def fit_columns_to(self, width: int) -> None:
+        """Spread ``width`` over as many columns as fit without eliding text.
+
+        The cell never shrinks below its natural width -- if the popup is
+        too narrow the number of columns is reduced instead.
+        """
+        if self._columns <= 1:
+            return
+        if not self._cell.isValid():
+            self._apply_column_layout()
+        natural = self._cell.width()
+        sp = self._list.spacing()
+        inner = width - self._chrome
+        effective = max(1, min(self._columns, (inner + sp) // (natural + sp)))
+        self._effective_columns = effective
+        cell_w = max(natural, (inner - sp * (effective - 1)) // effective - 1)
+        self._set_cell(QSize(cell_w, self._cell.height()))
 
     def selected_values(self) -> list:
         return [self._list.item(i).data(Qt.UserRole)
@@ -636,9 +837,19 @@ class _MultiSelectPopup(QFrame):
         btn.adjustSize()
         bw, bh = btn.sizeHint().width(), btn.sizeHint().height()
         # Anchor to the right edge of the item row, vertically centered
-        x = rect.right() - bw - 4
+        vp = self._list.viewport().width()
+        gap = 8
+        if self._columns > 1:
+            # ``rect`` is the full cell now that items carry explicit size
+            # hints, so just anchor to its right edge.
+            cell_right = rect.x() + rect.width()
+            x = cell_right - bw - gap
+        else:
+            x = vp - bw - gap
+        x = min(x, vp - bw - 2)
+        x = max(x, rect.x() + 2)
         y = rect.top() + (rect.height() - bh) // 2
-        btn.move(max(2, x), max(2, y))
+        btn.move(x, y)
         btn.show()
         btn.raise_()
         self._hover_only_target = item
@@ -680,7 +891,7 @@ class _MultiSelectPopup(QFrame):
             1 for i in range(self._list.count())
             if self._list.item(i).checkState() == Qt.Checked
         )
-        self._count_label.setText(f"已选 {count} 项")
+        self._count_label.setText(str(self._texts["count"]).format(n=count))
         self._sync_select_all_cb()
 
 
@@ -711,12 +922,72 @@ class MyCombo(QWidget):
     popupHidden = Signal()
 
     def __init__(self, parent: QWidget | None = None,
-                 placeholder: str = "请选择...",
+                 placeholder: str | None = None,
                  theme: dict | None = None,
                  search_in_popup: bool = True,
-                 string_only: bool = False) -> None:
+                 string_only: bool = False,
+                 columns: int = 2,
+                 max_col_chars: int = 20,
+                 texts: dict | None = None,
+                 min_height: int | None = None,
+                 min_width: int | None = None,
+                 arrow_width: int | None = None,
+                 popup_min_width: int | None = None,
+                 popup_min_height: int | None = None,
+                 list_min_height: int | None = None,
+                 list_max_height: int | None = None,
+                 item_min_height: int | None = None,
+                 popup_chrome: int | None = None,
+                 separator: str | None = None) -> None:
+        """
+        Parameters
+        ----------
+        placeholder : str, optional
+            Empty-state text.  Overrides ``texts["placeholder"]``.
+        theme : dict, optional
+            Any subset of :data:`DEFAULT_THEME`.
+        texts : dict, optional
+            Any subset of :data:`DEFAULT_TEXTS` -- every visible string.
+        min_height / min_width / arrow_width : int, optional
+            Geometry of the closed combo box.
+        popup_min_width / popup_min_height : int, optional
+            Floor size of the drop-down panel.
+        list_min_height / list_max_height : int, optional
+            Height range of the checkable list (it grows up to max, then
+            scrolls).
+        item_min_height : int, optional
+            Row height floor inside the list.
+        popup_chrome : int, optional
+            Horizontal frame + padding budget of the popup (used when
+            computing how many columns fit).
+        separator : str, optional
+            Joins the selected labels in the line edit; overrides
+            ``texts["separator"]``.
+        """
         super().__init__(parent)
-        self._placeholder = placeholder
+
+        # ---- texts & metrics: defaults <- caller overrides ----------------
+        self._texts: dict = {**DEFAULT_TEXTS, **(texts or {})}
+        if placeholder is not None:
+            self._texts["placeholder"] = placeholder
+        if separator is not None:
+            self._texts["separator"] = separator
+        self._metrics: dict[str, int] = {
+            **DEFAULT_METRICS,
+            **{k: int(v) for k, v in {
+                "min_height": min_height,
+                "min_width": min_width,
+                "arrow_width": arrow_width,
+                "popup_min_width": popup_min_width,
+                "popup_min_height": popup_min_height,
+                "list_min_height": list_min_height,
+                "list_max_height": list_max_height,
+                "item_min_height": item_min_height,
+                "popup_chrome": popup_chrome,
+            }.items() if v is not None},
+        }
+
+        self._placeholder = str(self._texts["placeholder"])
         self._items: list[tuple[str, object]] = []
         self._selected_values: list = []
         self._popup_open = False
@@ -724,11 +995,13 @@ class MyCombo(QWidget):
         self._theme: dict = dict(DEFAULT_THEME)
         self._search_in_popup = search_in_popup
         self._string_only = string_only
+        self._columns = max(1, int(columns))
+        self._max_col_chars = max(0, int(max_col_chars))   # 0 = unlimited
         if theme:
             self._theme.update(theme)
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(34)
+        self.setMinimumHeight(self._metrics["min_height"])
 
         # ---- main line-edit + arrow button --------------------------------
         layout = QHBoxLayout(self)
@@ -736,7 +1009,7 @@ class MyCombo(QWidget):
         layout.setSpacing(0)
 
         self._edit = QLineEdit(self)
-        self._edit.setPlaceholderText(placeholder)
+        self._edit.setPlaceholderText(self._placeholder)
         self._edit.setClearButtonEnabled(False)
         self._edit.installEventFilter(self)
         self._edit.textEdited.connect(self._on_text_edited)
@@ -746,61 +1019,42 @@ class MyCombo(QWidget):
         self._arrow.setCursor(Qt.PointingHandCursor)
         self._arrow.setFocusPolicy(Qt.NoFocus)
         self._arrow.setAutoRaise(True)
-        self._arrow.setFixedWidth(26)
+        self._arrow.setFixedWidth(self._metrics["arrow_width"])
         self._arrow.clicked.connect(self._toggle_popup)
 
         layout.addWidget(self._edit, 1)
         layout.addWidget(self._arrow)
         self.setFocusProxy(self._edit)
 
-        self.setStyleSheet(
-            f"""
-            MyCombo {{
-                background: {self._theme['background']};
-                border: {self._theme['border_width']}px solid {self._theme['border_color']};
-                border-radius: {self._theme['border_radius']}px;
-            }}
-            MyCombo:focus-within {{
-                border-color: {self._theme['border_color_focus']};
-            }}
-            /* The line edit shows a bottom border to make the caret /
-               focus location obvious. The colour goes from neutral grey to
-               brand blue when the edit has keyboard focus. Border is kept
-               at the same width in both states so the text never shifts. */
-            QLineEdit {{
-                color: {self._theme['text_color']};
-                border: none;
-                border-bottom: {self._theme['underline_width']}px solid {self._theme['underline_color']};
-                background: transparent;
-                padding: {self._theme['padding']};
-                selection-background-color: {self._theme['selection_bg']};
-                font-size: {self._theme['font_size']}px;
-            }}
-            QLineEdit:focus {{
-                border-bottom: {self._theme['underline_width']}px solid {self._theme['underline_color_focus']};
-            }}
-            QToolButton {{
-                border: none;
-                background: transparent;
-                color: {self._theme['arrow_color']};
-                font-size: 12px;
-                padding: 0 4px 2px 0;
-            }}
-            QToolButton:hover {{ color: {self._theme['arrow_color_hover']}; }}
-            """
-        )
+        self._apply_style()
 
         # ---- popup --------------------------------------------------------
-        self._popup = _MultiSelectPopup(self,
-                                        theme=self._theme,
-                                        search_in_popup=search_in_popup,
-                                        string_only=string_only)
+        self._popup = _MultiSelectPopup(
+            self,
+            theme=self._theme,
+            texts=self._texts,
+            search_in_popup=search_in_popup,
+            columns=self._columns,
+            max_col_chars=self._max_col_chars,
+            list_min_height=self._metrics["list_min_height"],
+            list_max_height=self._metrics["list_max_height"],
+            item_min_height=self._metrics["item_min_height"],
+            popup_chrome=self._metrics["popup_chrome"],
+        )
         self._popup.selectionChanged.connect(self._on_popup_selection_changed)
         self._popup.requestClose.connect(self.hide_popup)
         self._popup.filterOnlyThis.connect(self._on_filter_only_this)
 
         # Global click-outside watcher -- attached only while popup is open.
         self._outside_filter = _OutsideClickFilter(self, self._on_outside_click)
+
+        # Fallback for platforms that throttle QMoveEvent during a native
+        # window drag: while the drop-down is open, poll the combo's global
+        # anchor (cheap: one mapToGlobal per tick) and re-anchor on change.
+        self._anchor_key: tuple[int, int, int] | None = None
+        self._follow_timer = QTimer(self)
+        self._follow_timer.setInterval(50)
+        self._follow_timer.timeout.connect(self._reposition_popup)
 
     # ---- public API ------------------------------------------------------
     def line_edit(self) -> QLineEdit:
@@ -811,6 +1065,49 @@ class MyCombo(QWidget):
         """Return a copy of the current theme dict."""
         return dict(self._theme)
 
+    def texts(self) -> dict:
+        """Return a copy of the current text dictionary."""
+        return dict(self._texts)
+
+    def metrics(self) -> dict:
+        """Return a copy of the current metrics dictionary."""
+        return dict(self._metrics)
+
+    def _apply_style(self) -> None:
+        """(Re)emit the stylesheet from the current theme dictionary."""
+        t = self._theme
+        self.setStyleSheet(f"""
+            MyCombo {{
+                background: {t['background']};
+                border: {t['border_width']}px solid {t['border_color']};
+                border-radius: {t['border_radius']}px;
+            }}
+            MyCombo:focus-within {{
+                border-color: {t['border_color_focus']};
+            }}
+            /* A bottom line makes the caret / focus location obvious.
+               Same width in both states so the text never shifts. */
+            QLineEdit {{
+                color: {t['text_color']};
+                border: none;
+                border-bottom: {t['underline_width']}px solid {t['underline_color']};
+                background: transparent;
+                padding: {t['padding']};
+                selection-background-color: {t['selection_bg']};
+                font-size: {t['font_size']}px;
+            }}
+            QLineEdit:focus {{
+                border-bottom: {t['underline_width']}px solid {t['underline_color_focus']};
+            }}
+            QToolButton {{
+                border: none;
+                background: transparent;
+                color: {t['arrow_color']};
+                font-size: 12px;
+                padding: 0 4px 2px 0;
+            }}
+            QToolButton:hover {{ color: {t['arrow_color_hover']}; }}
+        """)
     def is_search_in_popup(self) -> bool:
         """Return whether the popup shows its own search box."""
         return self._search_in_popup
@@ -831,6 +1128,32 @@ class MyCombo(QWidget):
         """
         self._search_in_popup = bool(enabled)
         self._popup._search_edit.setVisible(self._search_in_popup)
+        if self._popup_open:
+            self.hide_popup()
+
+    def columns(self) -> int:
+        return self._columns
+
+    def set_columns(self, columns: int) -> None:
+        self._columns = max(1, int(columns))
+        self._popup._set_columns(self._columns)
+        if self._popup_open:
+            self.hide_popup()
+
+    def max_col_chars(self) -> int:
+        """Return the per-column character-width cap (0 = unlimited)."""
+        return self._max_col_chars
+
+    def set_max_col_chars(self, chars: int) -> None:
+        """Cap the width of one drop-down column at ``chars`` characters.
+
+        Labels longer than the cap are elided with "..." (the full text
+        stays available as a tooltip). ``0`` disables the cap, restoring
+        the "always as wide as the widest label" behaviour.
+        """
+        self._max_col_chars = max(0, int(chars))
+        self._popup._max_col_chars = self._max_col_chars
+        self._popup._apply_column_layout()
         if self._popup_open:
             self.hide_popup()
 
@@ -863,7 +1186,6 @@ class MyCombo(QWidget):
         labels of the current selection immediately.
         """
         self._string_only = bool(enabled)
-        self._popup._string_only = self._string_only
         if not self._string_only:
             # Re-render the current selection into the line edit now that
             # we are back in the labels-display mode.  Clear the editing
@@ -880,57 +1202,10 @@ class MyCombo(QWidget):
         construction time and for runtime theme switching.
         """
         self._theme.update(theme)
-        # Re-emit the stylesheet. We rebuild from the current theme by
-        # injecting the relevant values back into the f-string the
-        # constructor used; the constructor already ran, so re-run it via
-        # a small helper:
-        bg = self._theme['background']
-        bw = self._theme['border_width']
-        bc = self._theme['border_color']
-        br = self._theme['border_radius']
-        bcf = self._theme['border_color_focus']
-        tc = self._theme['text_color']
-        uc = self._theme['underline_color']
-        uw = self._theme['underline_width']
-        ucf = self._theme['underline_color_focus']
-        pad = self._theme['padding']
-        sbg = self._theme['selection_bg']
-        fs = self._theme['font_size']
-        ac = self._theme['arrow_color']
-        ach = self._theme['arrow_color_hover']
-        self.setStyleSheet(f"""
-            MyCombo {{
-                background: {bg};
-                border: {bw}px solid {bc};
-                border-radius: {br}px;
-            }}
-            MyCombo:focus-within {{
-                border-color: {bcf};
-            }}
-            QLineEdit {{
-                color: {tc};
-                border: none;
-                border-bottom: {uw}px solid {uc};
-                background: transparent;
-                padding: {pad};
-                selection-background-color: {sbg};
-                font-size: {fs}px;
-            }}
-            QLineEdit:focus {{
-                border-bottom: {uw}px solid {ucf};
-            }}
-            QToolButton {{
-                border: none;
-                background: transparent;
-                color: {ac};
-                font-size: 12px;
-                padding: 0 4px 2px 0;
-            }}
-            QToolButton:hover {{ color: {ach}; }}
-        """)
+        self._apply_style()
         # Re-apply popup styles so its buttons / list / frame match.
         self._popup._theme = dict(self._theme)
-        self._popup._apply_style()
+        self._popup._apply_style()   # re-measures item cells too
 
     def set_items(self, items: Iterable) -> None:
         normalized: list[tuple[str, object]] = []
@@ -1058,7 +1333,7 @@ class MyCombo(QWidget):
         if self._editing:
             return
         labels = self.selected_labels()
-        text = ", ".join(labels)
+        text = str(self._texts["separator"]).join(labels)
         self._edit.blockSignals(True)
         self._edit.setText(text)
         self._edit.setCursorPosition(0)
@@ -1102,6 +1377,48 @@ class MyCombo(QWidget):
         self._popup.apply_filter(text)
 
     # ---- popup open / close ---------------------------------------------
+    def _popup_geometry(self) -> QRect:
+        """Return the global geometry the drop-down should occupy right now.
+
+        Kept in one place so the pop-up can be re-anchored while it is open
+        (e.g. when the top-level window is dragged) without duplicating the
+        width/screen logic.
+        """
+        bottom_left = self.mapToGlobal(QPoint(0, self.height()))
+        screen = QApplication.screenAt(bottom_left)
+        rect = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        width = max(self.width(), self._metrics["popup_min_width"])
+        min_w = self._popup.minimumSizeHint().width()
+        preferred = self._popup.preferred_width()
+        if preferred > width:
+            width = min(preferred, max(rect.width() - 80, min_w))
+        width = max(width, min_w)
+        if self._columns > 1:
+            self._popup.fit_columns_to(width)
+        self._popup.adjustSize()
+        height = max(self._popup.sizeHint().height(), self._metrics["popup_min_height"])
+        x = bottom_left.x()
+        y = bottom_left.y() + 2
+        if x + width > rect.right():
+            x = max(rect.left(), rect.right() - width)
+        if y + height > rect.bottom():
+            y = self.mapToGlobal(QPoint(0, 0)).y() - height - 2
+        y = max(y, rect.top())
+        return QRect(x, y, width, height)
+
+    def _reposition_popup(self) -> None:
+        """Re-anchor the open drop-down (window moved / resized / scrolled)."""
+        if not self._popup_open or not self._popup.isVisible():
+            return
+        anchor = self.mapToGlobal(QPoint(0, self.height()))
+        key = (anchor.x(), anchor.y(), self.width())
+        if key == self._anchor_key:
+            return
+        self._anchor_key = key
+        geo = self._popup_geometry()
+        if geo != self._popup.geometry():
+            self._popup.setGeometry(geo)
+
     def show_popup(self) -> None:
         if self._popup_open:
             return
@@ -1121,20 +1438,10 @@ class MyCombo(QWidget):
         else:
             self._popup.apply_filter("")
 
-        bottom_left = self.mapToGlobal(QPoint(0, self.height()))
-        width = max(self.width(), 260)
-        screen = QApplication.screenAt(bottom_left)
-        rect = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-        self._popup.adjustSize()
-        height = max(self._popup.sizeHint().height(), 240)
-        x = bottom_left.x()
-        y = bottom_left.y() + 2
-        if x + width > rect.right():
-            x = max(rect.left(), rect.right() - width)
-        if y + height > rect.bottom():
-            y = self.mapToGlobal(QPoint(0, 0)).y() - height - 2
-        self._popup.setGeometry(x, y, width, height)
+        self._anchor_key = None
+        self._popup.setGeometry(self._popup_geometry())
         self._popup.show()
+        self._follow_timer.start()
 
         QApplication.instance().installEventFilter(self._outside_filter)
         self.popupShown.emit()
@@ -1144,6 +1451,8 @@ class MyCombo(QWidget):
         if not self._popup_open:
             return
         self._popup_open = False
+        self._follow_timer.stop()
+        self._anchor_key = None
         self._popup.hide()
         try:
             QApplication.instance().removeEventFilter(self._outside_filter)
@@ -1186,10 +1495,6 @@ class MyCombo(QWidget):
             w = w.parentWidget()
         self.hide_popup()
 
-    def _geometry_contains_global(self, gp: QPoint) -> bool:
-        top_left = self.mapToGlobal(QPoint(0, 0))
-        return QRect(top_left, self.size()).contains(gp)
-
     # ---- event filter on the QLineEdit ----------------------------------
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self._edit:
@@ -1226,14 +1531,6 @@ class MyCombo(QWidget):
                         return True
         return super().eventFilter(obj, event)
 
-    def _is_descendant_of_popup(self, w: QWidget) -> bool:
-        p = w
-        while p is not None:
-            if p is self._popup:
-                return True
-            p = p.parentWidget()
-        return False
-
     def _enter_toggle_first_visible(self) -> None:
         list_w = self._popup._list
         for i in range(list_w.count()):
@@ -1257,25 +1554,48 @@ class MyCombo(QWidget):
 
     def sizeHint(self) -> QSize:
         fm = QFontMetrics(self.font())
-        return QSize(max(200, fm.horizontalAdvance(self._placeholder) + 60), 34)
+        m = self._metrics
+        width = fm.horizontalAdvance(self._placeholder) + 2 * m["arrow_width"] + 8
+        return QSize(max(m["min_width"], width), m["min_height"])
 
 
 class _OutsideClickFilter(QObject):
-    """Application-wide event filter that closes the popup on outside clicks.
+    """Application-wide event filter for an open MyCombo drop-down.
 
-    Decides "inside vs outside" by inspecting the event's *target widget*
-    (its parent chain), not by hit-testing global coordinates. This avoids
-    fragile geometry math under various window flags (Qt.Tool, frameless,
-    high-DPI scaling, multi-monitor setups, etc.) and -- more importantly --
-    correctly recognises clicks landing on items whose own ``mousePressEvent``
-    has already swallowed coordinates.
+    It does two things while the pop-up is open:
+
+    * closes the pop-up on clicks outside the combo / pop-up widget tree
+      (decided by walking the parent chain of the event target, not by
+      hit-testing global coordinates -- robust under Qt.Tool, frameless
+      windows, high-DPI scaling and multi-monitor setups),
+    * keeps the pop-up glued to the combo: any move / resize of the
+      top-level window (or of an ancestor inside a scroll area) re-anchors
+      it, and wheel scrolling re-anchors on the next event-loop turn.
     """
 
     def __init__(self, owner: "MyCombo", callback) -> None:
         super().__init__(owner)
+        self._owner = owner
         self._callback = callback
 
+    def _is_related(self, w: QWidget) -> bool:
+        """True when *w* is the combo, its window, or one of its ancestors."""
+        owner = self._owner
+        return w is owner or w is owner.window() or w.isAncestorOf(owner)
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        if event.type() == QEvent.MouseButtonPress:
+        t = event.type()
+        if t == QEvent.MouseButtonPress:
             self._callback(obj)
+        elif t in (QEvent.Move, QEvent.Resize):
+            owner = self._owner
+            if owner is not None and owner._popup_open \
+                    and isinstance(obj, QWidget) and self._is_related(obj):
+                owner._reposition_popup()
+        elif t == QEvent.Wheel:
+            owner = self._owner
+            if owner is not None and owner._popup_open \
+                    and isinstance(obj, QWidget) and self._is_related(obj):
+                # The viewport scrolls *after* the event is delivered.
+                QTimer.singleShot(0, owner._reposition_popup)
         return False

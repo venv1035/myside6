@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import weakref
+
 from PySide6.QtCore import QAbstractItemModel, QEvent, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import QWidget
@@ -42,14 +44,22 @@ class Badge(QWidget):
         Badge(target=btn).bind(my_list)
     """
 
-    _instances: set[Badge] = set()
+    # Weak references: a badge lives exactly as long as the widget tree it is
+    # parented to.  A strong ``set`` would keep every closed window alive.
+    _instances: "weakref.WeakSet[Badge]" = weakref.WeakSet()
     _timer: QTimer | None = None
+    _poll_ms: int = 300
 
     def __init__(self, target: QWidget | None = None,
                  *, color: str = "#ea4335",
                  text_color: str = "#ffffff",
                  max_count: int = 999,
-                 min_size: int = 20) -> None:
+                 min_size: int = 20,
+                 padding: int = 8,
+                 font_size: int | None = None,
+                 overflow_suffix: str = "+",
+                 offset: tuple[int, int] = (0, 0),
+                 poll_ms: int | None = None) -> None:
         # Parent to the top-level window so we aren't clipped.
         win = self._find_window(target)
         super().__init__(win)
@@ -57,21 +67,39 @@ class Badge(QWidget):
         self._count = 0
         self._max_count = max_count
         self._min_size = min_size
+        self._padding = max(0, int(padding))
+        self._overflow_suffix = overflow_suffix
+        self._offset = QPoint(int(offset[0]), int(offset[1]))
         self._current_diameter = min_size
         self._color = QColor(color)
         self._text_color = QColor(text_color)
         self._source = None
+
+        if font_size is not None:
+            font = self.font()
+            font.setPixelSize(int(font_size))
+            self.setFont(font)
 
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setVisible(False)
 
         # Register so the polling timer picks us up.
         Badge._instances.add(self)
-        self.destroyed.connect(lambda: Badge._instances.discard(self))
-        Badge._ensure_timer()
+        if poll_ms is not None:
+            Badge.set_poll_interval(poll_ms)
+        else:
+            Badge._ensure_timer()
 
         if target is not None:
             target.installEventFilter(self)
+            # Keep a strong reference on the *target* so a chained
+            # ``Badge(target=btn).bind(items)`` is not garbage collected;
+            # the badge then lives exactly as long as the widget tree.
+            holders = getattr(target, "_badges", None)
+            if holders is None:
+                holders = []
+                target._badges = holders
+            holders.append(self)
 
     # ---- public API -------------------------------------------------------
 
@@ -133,11 +161,19 @@ class Badge(QWidget):
     # ---- class-level polling ----------------------------------------------
 
     @classmethod
+    def set_poll_interval(cls, ms: int) -> None:
+        """Change the shared polling interval (applies to every badge)."""
+        cls._poll_ms = max(16, int(ms))
+        cls._ensure_timer()
+        if cls._timer is not None:
+            cls._timer.start(cls._poll_ms)
+
+    @classmethod
     def _ensure_timer(cls) -> None:
         if cls._timer is None:
             cls._timer = QTimer()
             cls._timer.timeout.connect(cls._poll_all)
-            cls._timer.start(300)
+            cls._timer.start(cls._poll_ms)
 
     @classmethod
     def _poll_all(cls) -> None:
@@ -196,7 +232,7 @@ class Badge(QWidget):
             return ""
         if self._count <= self._max_count:
             return str(self._count)
-        return f"{self._max_count}+"
+        return f"{self._max_count}{self._overflow_suffix}"
 
     def _calc_diameter(self) -> int:
         text = self._display_text()
@@ -204,7 +240,7 @@ class Badge(QWidget):
             return 0
         fm = QFontMetrics(self.font())
         tw = fm.horizontalAdvance(text)
-        return max(self._min_size, tw + 8)
+        return max(self._min_size, tw + self._padding)
 
     def _update_size(self) -> None:
         self._current_diameter = max(self._calc_diameter(), self._min_size)
@@ -216,7 +252,8 @@ class Badge(QWidget):
             return
         tr = t.mapTo(p, QPoint(t.width(), 0))
         s = self._current_diameter
-        self.setGeometry(tr.x() - s // 2, tr.y() - s // 2, s, s)
+        self.setGeometry(tr.x() - s // 2 + self._offset.x(),
+                         tr.y() - s // 2 + self._offset.y(), s, s)
         self.raise_()
 
     def eventFilter(self, obj: QWidget, event: QEvent) -> bool:

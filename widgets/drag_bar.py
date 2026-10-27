@@ -227,25 +227,32 @@ class _FlowLayout(QLayout):
 # ── Trash zone ──────────────────────────────────────────────────────────
 
 class _TrashZone(QWidget):
+    """Drop target that deletes the dropped items."""
+
     accepted = Signal(list)
 
-    def __init__(self, parent=None):
+    def __init__(self, opts: dict, parent=None):
         super().__init__(parent)
+        self._opts = opts
         self._over = False
         self.setAcceptDrops(True)
-        self.setFixedSize(56, 60)
+        self.setFixedSize(*opts["trash_size"])
 
     def paintEvent(self, event):
+        o = self._opts
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        danger = QColor(o["danger"])
         if self._over:
-            p.setBrush(QColor(234, 67, 53, 30))
-            p.setPen(QPen(QColor(234, 67, 53), 2))
-            p.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 8, 8)
-        p.setPen(QColor(180, 180, 180) if not self._over else QColor(234, 67, 53))
-        font = QFont("Segoe UI Symbol", 22)
-        p.setFont(font)
-        p.drawText(self.rect(), Qt.AlignCenter, "\U0001F5D1")
+            fill = QColor(danger)
+            fill.setAlpha(30)
+            p.setBrush(fill)
+            p.setPen(QPen(danger, 2))
+            p.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2),
+                              o["zone_radius"], o["zone_radius"])
+        p.setPen(danger if self._over else QColor(o["muted"]))
+        p.setFont(QFont(o["icon_font_family"], o["trash_font_size"]))
+        p.drawText(self.rect(), Qt.AlignCenter, o["trash_icon"])
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat(_MIME):
@@ -270,27 +277,30 @@ class _TrashZone(QWidget):
 # ── Reset zone ──────────────────────────────────────────────────────────
 
 class _ResetZone(QWidget):
+    """Click target that restores the item list to its last snapshot."""
+
     clicked = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, opts: dict, parent=None):
         super().__init__(parent)
-        self.setFixedSize(56, 60)
+        self._opts = opts
+        self.setFixedSize(*opts["reset_size"])
         self._hovered = False
         self.setCursor(Qt.PointingHandCursor)
         self.setMouseTracking(True)
 
     def paintEvent(self, event):
+        o = self._opts
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = self.rect().adjusted(2, 2, -2, -2)
         if self._hovered:
-            p.setBrush(QColor(0, 0, 0, 12))
+            p.setBrush(QColor(o["reset_hover_fill"]))
             p.setPen(Qt.NoPen)
-            p.drawRoundedRect(r, 8, 8)
-        p.setPen(QColor(150, 150, 150) if not self._hovered else QColor(50, 50, 50))
-        font = QFont("Segoe UI Symbol", 20)
-        p.setFont(font)
-        p.drawText(self.rect(), Qt.AlignCenter, "\u21BA")
+            p.drawRoundedRect(r, o["zone_radius"], o["zone_radius"])
+        p.setPen(QColor(o["reset_hover_color"] if self._hovered else o["mid"]))
+        p.setFont(QFont(o["icon_font_family"], o["reset_font_size"]))
+        p.drawText(self.rect(), Qt.AlignCenter, o["reset_icon"])
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -346,50 +356,54 @@ class _DragItem(QWidget):
     clicked = Signal(str, bool, bool)
     dragRequested = Signal(str)
 
-    def __init__(self, item: DragBarItem, parent=None):
+    def __init__(self, item: DragBarItem, opts: dict, parent=None):
         super().__init__(parent)
         self._item = item
+        self._opts = opts
         self.selected = False
         self._hovered = False
-        self.setFixedSize(64, 64)
+        self.setFixedSize(opts["item_size"], opts["item_size"])
         self.setCursor(Qt.OpenHandCursor)
         self.setMouseTracking(True)
         self.setToolTip(item.text)
         self._drag_start: QPoint | None = None
 
     def sizeHint(self):
-        return QSize(64, 64)
+        return QSize(self._opts["item_size"], self._opts["item_size"])
 
     def paintEvent(self, event):
+        o = self._opts
+        radius = o["item_radius"]
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = self.rect().adjusted(2, 2, -2, -2)
 
         if self.selected:
-            p.setBrush(QColor(26, 115, 232, 35))
-            p.setPen(QPen(QColor(26, 115, 232), 2))
-            p.drawRoundedRect(r, 8, 8)
+            p.setBrush(QColor(o["item_selected_fill"]))
+            p.setPen(QPen(QColor(o["accent"]), 2))
+            p.drawRoundedRect(r, radius, radius)
         elif self._hovered:
-            p.setBrush(QColor(0, 0, 0, 10))
+            p.setBrush(QColor(o["item_hover_fill"]))
             p.setPen(Qt.NoPen)
-            p.drawRoundedRect(r, 8, 8)
+            p.drawRoundedRect(r, radius, radius)
 
-        sz = 28
+        sz = o["icon_size"]
         if not self._item._icon.isNull():
             px = self._item._icon.pixmap(sz, sz)
             ix = (self.width() - sz) // 2
-            p.drawPixmap(ix, 6, px)
+            p.drawPixmap(ix, o["icon_top"], px)
         else:
-            p.setPen(QColor(180, 180, 180))
-            font = QFont("Segoe UI Symbol", 18)
-            p.setFont(font)
-            p.drawText(QRect(0, 4, self.width(), sz + 4), Qt.AlignCenter, "\U0001F4C4")
+            p.setPen(QColor(o["item_icon_color"]))
+            p.setFont(QFont(o["icon_font_family"], o["label_font_size"] * 2))
+            p.drawText(QRect(0, 4, self.width(), sz + 4), Qt.AlignCenter,
+                       o["placeholder_icon"])
 
-        p.setPen(QColor(50, 50, 50))
+        p.setPen(QColor(o["item_text_color"]))
         font = QFont(self.font())
-        font.setPointSize(8)
+        font.setPointSize(o["label_font_size"])
         p.setFont(font)
-        p.drawText(QRect(0, 40, self.width(), 22), Qt.AlignCenter, self._item.text)
+        p.drawText(QRect(0, o["label_top"], self.width(), o["label_height"]),
+                   Qt.AlignCenter, self._item.text)
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
@@ -439,12 +453,26 @@ class DragBar(QWidget):
     spacing : int
         元素间距。
     style : dict | None
-        样式字典，支持以下键：
-        ``background``, ``border``, ``border_radius``。
+        样式字典，覆盖 :data:`DragBar.DEFAULT_STYLE` 中的任意键
+        （背景 / 边框 / 颜色 / 尺寸 / 图标字符……）。
     closable : bool
         是否显示右上角 X 关闭按钮。
     vertical : bool
         True 为纵向排列，False 为横向。
+    item_size : int
+        单个图标的边长（含文字区域）。
+    icon_size : int
+        图标像素尺寸。
+    label_font_size : int
+        图标下方文字字号(pt)。
+    trash_size, reset_size : tuple[int, int]
+        垃圾桶 / 重置按钮的尺寸。
+    trash_icon, reset_icon : str
+        垃圾桶 / 重置按钮显示的字符。
+    close_text : str
+        右上角关闭按钮的文字。
+    show_trash, show_reset : bool
+        是否显示垃圾桶 / 重置按钮。
 
     Signals
     -------
@@ -460,15 +488,67 @@ class DragBar(QWidget):
     closed = Signal()
 
     DEFAULT_STYLE = {
+        # -- container ----------------------------------------------------
         "background": "transparent",
         "border": "none",
         "border_radius": 0,
+        "padding": 4,
+        # -- items ---------------------------------------------------------
+        "item_size": 64,
+        "icon_size": 28,
+        "icon_top": 6,
+        "label_top": 40,
+        "label_height": 22,
+        "label_font_size": 8,
+        "item_radius": 8,
+        "item_text_color": "#323232",
+        "item_icon_color": "#b4b4b4",
+        "item_hover_fill": "rgba(0, 0, 0, 10)",
+        "item_selected_fill": "rgba(26, 115, 232, 35)",
+        "accent": "#1a73e8",
+        "placeholder_icon": "\U0001F4C4",
+        "icon_font_family": "Segoe UI Symbol",
+        "drag_gap": 4,
+        # -- trash / reset zones -------------------------------------------
+        "show_trash": True,
+        "show_reset": True,
+        "trash_size": (56, 60),
+        "trash_icon": "\U0001F5D1",
+        "trash_font_size": 22,
+        "reset_size": (56, 60),
+        "reset_icon": "\u21BA",
+        "reset_font_size": 20,
+        "reset_hover_fill": "rgba(0, 0, 0, 12)",
+        "reset_hover_color": "#323232",
+        "zone_radius": 8,
+        # -- palette -------------------------------------------------------
+        "danger": "#ea4335",
+        "muted": "#b4b4b4",
+        "mid": "#969696",
+        # -- close button --------------------------------------------------
+        "close_text": "\u00D7",
+        "close_size": 18,
+        "close_font_size": 15,
+        "close_color": "#999999",
+        "close_hover_color": "#333333",
+        "close_tip": "关闭",
+        "header_height": 20,
     }
 
     def __init__(self, fixed_length: int | None = None, spacing: int = 6,
                  style: dict | None = None, closable: bool = True,
                  vertical: bool = False,
-                 parent: QWidget | None = None):
+                 parent: QWidget | None = None,
+                 *, item_size: int | None = None,
+                 icon_size: int | None = None,
+                 label_font_size: int | None = None,
+                 trash_size: tuple[int, int] | None = None,
+                 reset_size: tuple[int, int] | None = None,
+                 trash_icon: str | None = None,
+                 reset_icon: str | None = None,
+                 close_text: str | None = None,
+                 show_trash: bool = True,
+                 show_reset: bool = True):
         super().__init__(parent)
         self._spacing = spacing
         self._vertical = vertical
@@ -480,7 +560,19 @@ class DragBar(QWidget):
         self._rubber_rect: QRect | None = None
         self._drag_data: dict | None = None
         self._initial_data: list[dict] = []
+
+        # One options dict drives every painter, so a single ``style=`` arg
+        # (plus the convenience keywords below) re-skins the whole bar.
         self._style = dict(self.DEFAULT_STYLE)
+        self._style["show_trash"] = bool(show_trash)
+        self._style["show_reset"] = bool(show_reset)
+        for key, value in (("item_size", item_size), ("icon_size", icon_size),
+                           ("label_font_size", label_font_size),
+                           ("trash_size", trash_size), ("reset_size", reset_size),
+                           ("trash_icon", trash_icon), ("reset_icon", reset_icon),
+                           ("close_text", close_text)):
+            if value is not None:
+                self._style[key] = value
         if style:
             self._style.update(style)
 
@@ -488,17 +580,23 @@ class DragBar(QWidget):
         self._flow_widget = _DropContainer(self)
         self._flow = _FlowLayout(self._flow_widget, vertical=vertical)
         self._flow.setSpacing(spacing)
-        self._flow.setContentsMargins(4, 4, 4, 4)
+        pad = int(self._style["padding"])
+        self._flow.setContentsMargins(pad, pad, pad, pad)
 
-        # trash
-        self._trash = _TrashZone()
+        # trash / reset zones -- created from the same options dict
+        self._trash = _TrashZone(self._style)
         self._trash.accepted.connect(self._on_trash_drop)
-        self._flow.addWidget(self._trash)
+        if self._style["show_trash"]:
+            self._flow.addWidget(self._trash)
+        else:
+            self._trash.hide()
 
-        # reset
-        self._reset_zone = _ResetZone()
+        self._reset_zone = _ResetZone(self._style)
         self._reset_zone.clicked.connect(self._on_reset)
-        self._flow.addWidget(self._reset_zone)
+        if self._style["show_reset"]:
+            self._flow.addWidget(self._reset_zone)
+        else:
+            self._reset_zone.hide()
 
         # scroll area
         self._scroll = QScrollArea()
@@ -521,20 +619,25 @@ class DragBar(QWidget):
         # header row with close button
         if closable:
             self._header = QWidget()
-            self._header.setFixedHeight(20)
+            self._header.setFixedHeight(int(self._style["header_height"]))
             self._header.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             hlay = QHBoxLayout(self._header)
             hlay.setContentsMargins(0, 0, 4, 0)
             hlay.addStretch()
-            self._close_btn = QPushButton("\u00D7", self._header)
-            self._close_btn.setFixedSize(18, 18)
+            size = int(self._style["close_size"])
+            self._close_btn = QPushButton(str(self._style["close_text"]),
+                                          self._header)
+            self._close_btn.setFixedSize(size, size)
             self._close_btn.setFlat(True)
-            self._close_btn.setStyleSheet("""
-                QPushButton {
-                    font-size: 15px; font-weight: bold; color: #999;
+            self._close_btn.setToolTip(str(self._style.get("close_tip", "关闭")))
+            self._close_btn.setStyleSheet(f"""
+                QPushButton {{
+                    font-size: {self._style['close_font_size']}px;
+                    font-weight: bold;
+                    color: {self._style['close_color']};
                     background: transparent; border: none;
-                }
-                QPushButton:hover { color: #333; }
+                }}
+                QPushButton:hover {{ color: {self._style['close_hover_color']}; }}
             """)
             self._close_btn.setParent(self)
             self._close_btn.raise_()
@@ -554,13 +657,19 @@ class DragBar(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, '_close_btn'):
-            self._close_btn.move(self.width() - 22, 2)
+            size = self._close_btn.width()
+            self._close_btn.move(self.width() - size - 4, 2)
 
     # ── style ────────────────────────────────────────────────────────────
 
     def set_style(self, style: dict) -> None:
+        """Merge *style* into the current options and re-skin the bar."""
         self._style.update(style)
         self._apply_style()
+        for w in self._widgets.values():
+            w.update()
+        self._trash.update()
+        self._reset_zone.update()
 
     def _apply_style(self):
         bg = self._style.get("background", "transparent")
@@ -583,7 +692,7 @@ class DragBar(QWidget):
             item = DragBarItem(item, text or "", icon)
         if item.name in self._widgets:
             return None
-        w = _DragItem(item, parent=self._flow_widget)
+        w = _DragItem(item, self._style, parent=self._flow_widget)
         w.dragRequested.connect(self._on_item_drag_requested)
         w.clicked.connect(self._on_item_clicked)
         item.icon_changed.connect(w.update)
@@ -600,7 +709,7 @@ class DragBar(QWidget):
             item = DragBarItem(item, text or "", icon)
         if item.name in self._widgets:
             return None
-        w = _DragItem(item, parent=self._flow_widget)
+        w = _DragItem(item, self._style, parent=self._flow_widget)
         w.dragRequested.connect(self._on_item_drag_requested)
         w.clicked.connect(self._on_item_clicked)
         item.icon_changed.connect(w.update)
@@ -660,6 +769,10 @@ class DragBar(QWidget):
              "icon_src": it._icon_src}
             for it in self._items
         ]
+
+    def reset(self) -> None:
+        """Restore the item list saved by the last :meth:`snapshot`."""
+        self._on_reset()
 
     def _on_reset(self):
         if not self._initial_data:
@@ -728,14 +841,15 @@ class DragBar(QWidget):
 
         widgets = [self._widgets[n] for n in names if n in self._widgets]
         if widgets:
-            tw = sum(w.width() for w in widgets) + (len(widgets) - 1) * 4
+            gap = int(self._style["drag_gap"])
+            tw = sum(w.width() for w in widgets) + (len(widgets) - 1) * gap
             pm = QPixmap(tw, widgets[0].height())
             pm.fill(Qt.transparent)
             pp = QPainter(pm)
             x = 0
             for w in widgets:
                 pp.drawPixmap(x, 0, w.grab())
-                x += w.width() + 4
+                x += w.width() + gap
             pp.end()
             drag.setPixmap(pm)
             drag.setHotSpot(QPoint(0, 0))
@@ -891,6 +1005,7 @@ class DragBar(QWidget):
     # ── helpers ─────────────────────────────────────────────────────────
 
     def _unique_name(self, base: str) -> str:
+        """Return a name derived from *base* that no item is using yet."""
         i = 1
         while f"{base}_{i}" in self._widgets:
             i += 1
