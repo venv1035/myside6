@@ -24,6 +24,57 @@ myside6/
 
 ---
 
+## 最小可运行示例
+
+把下面这段存成 `mini.py`（与 `widgets/` 同级），然后 `uv run python mini.py`，
+四个控件会同时出现在一个窗口里。**全程只覆盖了 3 个配置项，其余全走默认值。**
+
+```python
+import sys
+
+from PySide6.QtWidgets import QApplication, QPushButton, QVBoxLayout, QWidget
+
+from widgets import Badge, DragBar, MyCombo, MyTable
+
+app = QApplication(sys.argv)
+win = QWidget()
+lay = QVBoxLayout(win)
+
+combo = MyCombo(texts={"ok": "应用"})                # 只改「确定」按钮文案
+combo.set_items(["北京", "上海", "广州"])
+combo.selectionChanged.connect(lambda v: print("选中:", v))
+
+table = MyTable(metrics={"row_height": 34})          # 只改行高
+table.set_data(["城市", "人口"], [["北京", 2189], ["上海", 2487]])
+
+btn = QPushButton("下载")
+Badge(target=btn, color="#1a73e8").bind(["a", "b"])  # 角标自动跟随列表长度
+
+bar = DragBar(style={"background": "#fafafa", "border_radius": 8})
+bar.add_item("folder", "文件夹", "folder")
+bar.add_item("calc", "计算器", "accessories-calculator")
+bar.snapshot()                                       # 记录重置基线
+
+lay.addWidget(combo)
+lay.addWidget(table)
+lay.addWidget(btn)
+lay.addWidget(bar)
+win.resize(560, 460)
+win.show()
+sys.exit(app.exec())
+```
+
+各控件最少只要 1~2 行就能用起来：
+
+| 控件 | 最小用法 | 效果 |
+| --- | --- | --- |
+| `MyCombo` | `MyCombo().set_items(["北京", "上海"])` | 空配置即可多选下拉 |
+| `MyTable` | `MyTable().set_data(["城市"], [["北京"]])` | 自动列宽 + 漏斗筛选 |
+| `Badge` | `Badge(target=btn).bind(data)` | 角标自动跟数据条数 |
+| `DragBar` | `DragBar().add_item("folder", "文件夹", "folder")` | 可拖拽、可删除 |
+
+---
+
 ## 通用约定
 
 | 概念 | 含义 |
