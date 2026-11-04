@@ -13,13 +13,9 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
-    QCursor,
-    QFocusEvent,
     QFontMetrics,
     QKeyEvent,
     QMouseEvent,
-    QPainter,
-    QPen,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -250,11 +246,13 @@ DEFAULT_METRICS: dict[str, int] = {
 class _MultiSelectPopup(QFrame):
     """Drop-down list shown by :class:`MyCombo`.
 
-    The popup is a top-level :class:`QFrame` flagged as ``Qt.Tool`` and built
-    with ``WA_ShowWithoutActivating`` + ``Qt.NoFocus`` on every child widget.
-    That way the parent ``QLineEdit`` keeps the keyboard focus and IME
-    composition while the user clicks check-boxes in the drop-down -- editing
-    and the drop-down never fight for focus.
+    The popup is a plain child widget of the top-level window (re-parented in
+    :py:meth:`MyCombo.show_popup`).  Being part of the window means it moves
+    and repaints together with the window -- including while the user drags the
+    native title bar, where Qt's own event loop is suspended -- and can never
+    be hidden behind the window.  ``WA_ShowWithoutActivating`` + ``Qt.NoFocus``
+    on every child widget keep the keyboard focus and IME composition on the
+    parent ``QLineEdit``.
     """
 
     selectionChanged = Signal(list)   # current list of selected values
@@ -271,8 +269,7 @@ class _MultiSelectPopup(QFrame):
                  list_max_height: int = 320,
                  item_min_height: int = 24,
                  popup_chrome: int = 44) -> None:
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
-                         | Qt.NoDropShadowWindowHint)
+        super().__init__(None)
         self._owner = parent
         self._theme: dict = dict(theme) if theme else dict(DEFAULT_THEME)
         self._texts: dict = dict(DEFAULT_TEXTS)
@@ -286,7 +283,6 @@ class _MultiSelectPopup(QFrame):
         self.setMouseTracking(True)
         self._search_in_popup = search_in_popup
         self._columns = max(1, int(columns))
-        self._effective_columns = self._columns
         self._max_col_chars = max(0, int(max_col_chars))   # 0 = unlimited
         self._list_min_height = int(list_min_height)
         self._list_max_height = int(list_max_height)
@@ -510,7 +506,6 @@ class _MultiSelectPopup(QFrame):
 
     def _set_columns(self, columns: int) -> None:
         self._columns = max(1, int(columns))
-        self._effective_columns = self._columns
         if self._columns > 1:
             self._list.setFlow(QListView.LeftToRight)
             self._list.setWrapping(True)
@@ -600,7 +595,6 @@ class _MultiSelectPopup(QFrame):
             for i in range(self._list.count()):
                 self._list.item(i).setSizeHint(QSize())
             return
-        self._effective_columns = self._columns
         self._set_cell(self._natural_cell())
 
     def _set_cell(self, cell: QSize) -> None:
@@ -642,7 +636,6 @@ class _MultiSelectPopup(QFrame):
         sp = self._list.spacing()
         inner = width - self._chrome
         effective = max(1, min(self._columns, (inner + sp) // (natural + sp)))
-        self._effective_columns = effective
         cell_w = max(natural, (inner - sp * (effective - 1)) // effective - 1)
         self._set_cell(QSize(cell_w, self._cell.height()))
 
@@ -701,10 +694,6 @@ class _MultiSelectPopup(QFrame):
                 edit.blockSignals(False)
                 owner._editing = True
         self.apply_filter(text)
-
-    def has_visible_items(self) -> bool:
-        return any(not self._list.item(i).isHidden()
-                   for i in range(self._list.count()))
 
     def _on_select_all_cb_clicked(self) -> None:
         # Toggle: if every visible item is checked, un-check them; else
@@ -1048,9 +1037,9 @@ class MyCombo(QWidget):
         # Global click-outside watcher -- attached only while popup is open.
         self._outside_filter = _OutsideClickFilter(self, self._on_outside_click)
 
-        # Fallback for platforms that throttle QMoveEvent during a native
-        # window drag: while the drop-down is open, poll the combo's global
-        # anchor (cheap: one mapToGlobal per tick) and re-anchor on change.
+        # Fallback for ancestor layout changes (scrolling, splitter drags) that
+        # move the combo inside the window without a matching Move event: poll
+        # its window-local anchor and re-anchor when it changes.
         self._anchor_key: tuple[int, int, int] | None = None
         self._follow_timer = QTimer(self)
         self._follow_timer.setInterval(50)
@@ -1378,39 +1367,60 @@ class MyCombo(QWidget):
 
     # ---- popup open / close ---------------------------------------------
     def _popup_geometry(self) -> QRect:
-        """Return the global geometry the drop-down should occupy right now.
+        """Return the window-local geometry the drop-down should occupy.
 
-        Kept in one place so the pop-up can be re-anchored while it is open
-        (e.g. when the top-level window is dragged) without duplicating the
-        width/screen logic.
+        The drop-down is a child of the top-level window, so its coordinates
+        are relative to that window: it follows every window move for free and
+        is clipped by (never hidden behind) the window.  When there is not
+        enough room below the combo, the panel flips above; width and height
+        are clamped to the window.
         """
-        bottom_left = self.mapToGlobal(QPoint(0, self.height()))
-        screen = QApplication.screenAt(bottom_left)
-        rect = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        win = self.window()
+        if win is None:
+            return QRect(0, 0, 1, 1)
+        win_rect = win.rect()
+        gap = 2
+        margin = 4
         width = max(self.width(), self._metrics["popup_min_width"])
         min_w = self._popup.minimumSizeHint().width()
         preferred = self._popup.preferred_width()
         if preferred > width:
-            width = min(preferred, max(rect.width() - 80, min_w))
+            width = min(preferred, max(win_rect.width() - 2 * margin, min_w))
         width = max(width, min_w)
+        width = min(width, max(win_rect.width() - 2 * margin, 1))
         if self._columns > 1:
             self._popup.fit_columns_to(width)
         self._popup.adjustSize()
-        height = max(self._popup.sizeHint().height(), self._metrics["popup_min_height"])
-        x = bottom_left.x()
-        y = bottom_left.y() + 2
-        if x + width > rect.right():
-            x = max(rect.left(), rect.right() - width)
-        if y + height > rect.bottom():
-            y = self.mapToGlobal(QPoint(0, 0)).y() - height - 2
-        y = max(y, rect.top())
-        return QRect(x, y, width, height)
+        height = max(self._popup.sizeHint().height(),
+                     self._metrics["popup_min_height"])
+        top_left = self.mapTo(win, QPoint(0, 0))
+        bottom_left = self.mapTo(win, QPoint(0, self.height()))
+        x = min(max(bottom_left.x(), win_rect.left() + margin),
+                win_rect.right() - width - margin + 1)
+        room_below = win_rect.bottom() - bottom_left.y() - gap - margin
+        room_above = top_left.y() - gap - margin
+        if height > room_below and room_above > room_below:
+            height = min(height, max(room_above, 1))
+            y = top_left.y() - height - gap
+        else:
+            height = min(height, max(room_below, 1))
+            y = bottom_left.y() + gap
+        y = max(y, win_rect.top() + margin)
+        return QRect(x, y, max(width, 1), max(height, 1))
 
     def _reposition_popup(self) -> None:
-        """Re-anchor the open drop-down (window moved / resized / scrolled)."""
+        """Re-anchor the open drop-down inside its window.
+
+        Moving the window itself needs no work -- as a child widget the panel
+        travels with it.  This only handles the combo moving *inside* the
+        window (scrolling, splitter / layout changes).
+        """
         if not self._popup_open or not self._popup.isVisible():
             return
-        anchor = self.mapToGlobal(QPoint(0, self.height()))
+        win = self.window()
+        if win is None:
+            return
+        anchor = self.mapTo(win, QPoint(0, self.height()))
         key = (anchor.x(), anchor.y(), self.width())
         if key == self._anchor_key:
             return
@@ -1439,11 +1449,20 @@ class MyCombo(QWidget):
             self._popup.apply_filter("")
 
         self._anchor_key = None
+        # Make the panel a child of the top-level window so it is part of the
+        # window's own native surface: it then moves / repaints together with
+        # the window while the title bar is dragged and can never end up
+        # underneath it.
+        win = self.window()
+        if win is not None and self._popup.parentWidget() is not win:
+            self._popup.setParent(win)
         self._popup.setGeometry(self._popup_geometry())
         self._popup.show()
+        self._popup.raise_()
         self._follow_timer.start()
 
-        QApplication.instance().installEventFilter(self._outside_filter)
+        app = QApplication.instance()
+        app.installEventFilter(self._outside_filter)
         self.popupShown.emit()
         self.update()
 
@@ -1454,10 +1473,8 @@ class MyCombo(QWidget):
         self._follow_timer.stop()
         self._anchor_key = None
         self._popup.hide()
-        try:
-            QApplication.instance().removeEventFilter(self._outside_filter)
-        except Exception:
-            pass
+        app = QApplication.instance()
+        app.removeEventFilter(self._outside_filter)
         # Clear the popup's search box so the next open starts fresh.
         if self._search_in_popup:
             self._popup._search_edit.clear()
@@ -1562,15 +1579,17 @@ class MyCombo(QWidget):
 class _OutsideClickFilter(QObject):
     """Application-wide event filter for an open MyCombo drop-down.
 
-    It does two things while the pop-up is open:
+    It does three things while the pop-up is open:
 
     * closes the pop-up on clicks outside the combo / pop-up widget tree
       (decided by walking the parent chain of the event target, not by
-      hit-testing global coordinates -- robust under Qt.Tool, frameless
-      windows, high-DPI scaling and multi-monitor setups),
-    * keeps the pop-up glued to the combo: any move / resize of the
-      top-level window (or of an ancestor inside a scroll area) re-anchors
-      it, and wheel scrolling re-anchors on the next event-loop turn.
+      hit-testing coordinates -- robust under high-DPI scaling and
+      multi-monitor setups),
+    * keeps the pop-up glued to the combo: any resize of the top-level
+      window (or of an ancestor inside a scroll area) re-anchors it, and
+      wheel scrolling re-anchors on the next event-loop turn.  Plain window
+      moves need no re-anchoring because the pop-up is a child of the window,
+    * closes it when the window is hidden / deactivated.
     """
 
     def __init__(self, owner: "MyCombo", callback) -> None:
@@ -1598,4 +1617,9 @@ class _OutsideClickFilter(QObject):
                     and isinstance(obj, QWidget) and self._is_related(obj):
                 # The viewport scrolls *after* the event is delivered.
                 QTimer.singleShot(0, owner._reposition_popup)
+        elif t in (QEvent.Hide, QEvent.WindowDeactivate):
+            owner = self._owner
+            if owner is not None and owner._popup_open \
+                    and isinstance(obj, QWidget) and obj is owner.window():
+                owner.hide_popup()
         return False

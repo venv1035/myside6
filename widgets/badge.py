@@ -61,7 +61,14 @@ class Badge(QWidget):
                  offset: tuple[int, int] = (0, 0),
                  poll_ms: int | None = None) -> None:
         # Parent to the top-level window so we aren't clipped.
-        win = self._find_window(target)
+        # ``target.window()`` returns *target itself* while it is not yet
+        # inside a window (e.g. the page widget has been built but not added
+        # to the tab widget).  Parenting the badge to the target in that
+        # situation clips it to a small corner sliver, so stay unparented and
+        # wait for the target's Show event instead.
+        win = target.window() if target is not None else None
+        if win is target:
+            win = None
         super().__init__(win)
         self._target = target
         self._count = 0
@@ -106,7 +113,6 @@ class Badge(QWidget):
     def set_count(self, count: int) -> None:
         """Set the badge number. Hidden when ``count <= 0``."""
         self._count = count
-        self.setVisible(count > 0)
         self._update_size()
         self._reposition()
         self.update()
@@ -219,14 +225,6 @@ class Badge(QWidget):
             return len(src)
         return 0
 
-    @staticmethod
-    def _find_window(w: QWidget | None) -> QWidget | None:
-        if w is None:
-            return None
-        while w.parentWidget() is not None:
-            w = w.parentWidget()
-        return w
-
     def _display_text(self) -> str:
         if self._count <= 0:
             return ""
@@ -247,17 +245,33 @@ class Badge(QWidget):
 
     def _reposition(self) -> None:
         t = self._target
-        p = self.parentWidget()
-        if t is None or p is None:
+        if t is None:
             return
-        tr = t.mapTo(p, QPoint(t.width(), 0))
+        win = t.window()
+        if win is None or win is t:
+            # Target is not inside a window yet (page built but not added to
+            # a tab / central widget).  Stay hidden instead of flashing as a
+            # floating window; the target's Show event brings us back.
+            self.setVisible(False)
+            return
+        if self.parentWidget() is not win:
+            # Corrects the case where the badge was created before the target
+            # had a window: it would otherwise stay clipped inside the target.
+            self.setParent(win)
+        # The badge lives on the top-level window, so it does not hide itself
+        # when the target's page (another tab) is switched away -- follow the
+        # target's effective visibility explicitly.
+        self.setVisible(self._count > 0 and t.isVisible())
+        tr = t.mapTo(win, QPoint(t.width(), 0))
         s = self._current_diameter
         self.setGeometry(tr.x() - s // 2 + self._offset.x(),
                          tr.y() - s // 2 + self._offset.y(), s, s)
         self.raise_()
 
     def eventFilter(self, obj: QWidget, event: QEvent) -> bool:
-        if obj is self._target and event.type() in (QEvent.Resize, QEvent.Move):
+        if obj is self._target and event.type() in (
+                QEvent.Resize, QEvent.Move, QEvent.Show, QEvent.Hide,
+                QEvent.ParentChange):
             self._reposition()
         return super().eventFilter(obj, event)
 

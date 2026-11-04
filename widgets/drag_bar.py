@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from PySide6.QtCore import QMimeData, QObject, QPoint, QRect, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDrag, QFont, QIcon, QMouseEvent, QPainter, QPen, QPixmap,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton,
+    QApplication, QFrame, QHBoxLayout, QLayout, QPushButton,
     QScrollArea, QVBoxLayout, QWidget, QWidgetItem,
 )
 
@@ -503,8 +502,8 @@ class DragBar(QWidget):
         "item_radius": 8,
         "item_text_color": "#323232",
         "item_icon_color": "#b4b4b4",
-        "item_hover_fill": "rgba(0, 0, 0, 10)",
-        "item_selected_fill": "rgba(26, 115, 232, 35)",
+        "item_hover_fill": "#0a000000",      # 黑色 4% (AARRGGBB)
+        "item_selected_fill": "#231a73e8",   # 主色 14%
         "accent": "#1a73e8",
         "placeholder_icon": "\U0001F4C4",
         "icon_font_family": "Segoe UI Symbol",
@@ -518,7 +517,7 @@ class DragBar(QWidget):
         "reset_size": (56, 60),
         "reset_icon": "\u21BA",
         "reset_font_size": 20,
-        "reset_hover_fill": "rgba(0, 0, 0, 12)",
+        "reset_hover_fill": "#0c000000",     # 黑色 5% (AARRGGBB)
         "reset_hover_color": "#323232",
         "zone_radius": 8,
         # -- palette -------------------------------------------------------
@@ -550,7 +549,6 @@ class DragBar(QWidget):
                  show_trash: bool = True,
                  show_reset: bool = True):
         super().__init__(parent)
-        self._spacing = spacing
         self._vertical = vertical
         self._items: list[DragBarItem] = []
         self._widgets: dict[str, _DragItem] = {}
@@ -757,7 +755,6 @@ class DragBar(QWidget):
         self.selection_changed.emit([])
 
     def set_spacing(self, spacing: int) -> None:
-        self._spacing = spacing
         self._flow.setSpacing(spacing)
 
     # ── snapshot / reset ────────────────────────────────────────────────
@@ -1001,15 +998,6 @@ class DragBar(QWidget):
                 self.item_removed.emit(n)
         self._selected = {n for n in self._selected if n in self._widgets}
         self.selection_changed.emit(list(self._selected))
-
-    # ── helpers ─────────────────────────────────────────────────────────
-
-    def _unique_name(self, base: str) -> str:
-        """Return a name derived from *base* that no item is using yet."""
-        i = 1
-        while f"{base}_{i}" in self._widgets:
-            i += 1
-        return f"{base}_{i}"
 
     # ── empty-area mouse: rubber band or deselect ───────────────────────
 

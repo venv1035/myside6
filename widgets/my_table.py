@@ -7,6 +7,7 @@ from PySide6.QtCore import (
     QDate,
     QEvent,
     QModelIndex,
+    QObject,
     QPoint,
     QRect,
     QSize,
@@ -16,7 +17,6 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
-    QAction,
     QColor,
     QIcon,
     QIntValidator,
@@ -47,7 +47,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStyle,
     QStyleOptionButton,
-    QStyleOptionHeader,
     QStyleOptionViewItem,
     QStyledItemDelegate,
     QTableView,
@@ -171,8 +170,10 @@ DEFAULT_TEXTS: dict[str, object] = {
     "today":                "今天",
     "today_tip":            "跳到今天",
     "year_placeholder":     "输入年份",
+    "month_placeholder":    "输入月份",
     "jump":                 "跳转",
     "year_hint":            "输入年份后回车跳转（{min}–{max}）",
+    "month_hint":           "输入月份后回车跳转（1–12）",
     "year_data_hint":       "；数据年份 {lo}–{hi}",
     "unbounded":            "不限",
     "no_range":             "未选择（不限）",
@@ -752,27 +753,58 @@ class _ChoiceGrid(QWidget):
 
     Modern date pickers do not scroll a 20-item year list: they show a small
     grid so every option is a single click away. ``picked`` reports the chosen
-    value and the owning menu closes itself.
+    value and the owning menu closes itself. ``scrolled`` reports mouse-wheel
+    steps (positive = wheel down, i.e. towards larger values) so the year
+    panel can lazily extend its range instead of stopping at a fixed window.
     """
 
     picked = Signal(int)
+    scrolled = Signal(int)
 
     def __init__(self, columns: int, values: Sequence[int], current: int,
                  suffix: str = "", parent: QWidget | None = None, *,
                  min_width: int = 58) -> None:
         super().__init__(parent)
+        self._suffix = suffix
+        self._min_width = int(min_width)
+        self._cells: list[QPushButton] = []
         grid = QGridLayout(self)
         grid.setContentsMargins(4, 2, 4, 4)
         grid.setSpacing(3)
         for index, value in enumerate(values):
-            cell = QPushButton(f"{value}{suffix}", self)
+            cell = QPushButton(self)
             cell.setObjectName("ChoiceCell")
             cell.setCheckable(True)
-            cell.setChecked(value == current)
             cell.setCursor(Qt.PointingHandCursor)
-            cell.setMinimumWidth(int(min_width))
-            cell.clicked.connect(lambda _=False, v=value: self._pick(v))
+            cell.setMinimumWidth(self._min_width)
+            cell.clicked.connect(
+                lambda _=False, c=cell: self._pick(int(c.property("choiceValue")))
+            )
             grid.addWidget(cell, index // columns, index % columns)
+            self._cells.append(cell)
+        self.set_values(values, current)
+
+    def set_values(self, values: Sequence[int], current: int) -> None:
+        """Update the visible choices in place (grid size stays the same)."""
+        values = list(values)
+        for index, cell in enumerate(self._cells):
+            if index >= len(values):
+                cell.hide()
+                continue
+            value = int(values[index])
+            cell.setProperty("choiceValue", value)
+            cell.setText(f"{value}{self._suffix}")
+            cell.setChecked(value == current)
+            cell.show()
+
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta:
+            steps = int(-delta / 120) or (-1 if delta > 0 else 1)
+            self.scrolled.emit(steps)
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def _pick(self, value: int) -> None:
         self.picked.emit(int(value))
@@ -782,7 +814,8 @@ class _ChoiceGrid(QWidget):
 
 
 class _YearEdit(QLineEdit):
-    """Year box inside the year panel: focus selects all, so typing replaces."""
+    """Numeric box inside the year / month panel: focus selects all so typing
+    replaces the pre-filled value instead of appending to it."""
 
     def focusInEvent(self, event) -> None:
         super().focusInEvent(event)
@@ -944,6 +977,7 @@ class _DateRangePicker(QWidget):
     # ---- year / month menu -----------------------------------------------
     def _fill_year_menu(self) -> None:
         """年份面板：可编辑输入框 + 「当前年 ± 10」的 3×7 网格。"""
+        t, m = self._texts, self._metrics
         menu = self._year_menu
         menu.clear()
         year, _month = self._grid.page()
@@ -977,11 +1011,27 @@ class _DateRangePicker(QWidget):
         row.addStretch(1)
         box.addLayout(row)
 
+        span = self._year_span
+        start = year - span
+
         grid = _ChoiceGrid(
-            3, range(year - self._year_span, year + self._year_span + 1),
+            3, range(start, start + 2 * span + 1),
             year, str(t["year_suffix"]), panel,
             min_width=m["choice_min_width"])
         box.addWidget(grid)
+
+        # 滚轮向上/向下滚动时整格年份窗口逐年平移（2016→2015→2014…／
+        # 2036→2037→2038…），而不是被固定的 ±span 窗口卡住。
+        def shift(steps: int) -> None:
+            nonlocal start
+            lo = max(int(m["year_min"]), start + steps)
+            hi = lo + 2 * span
+            if lo == start or hi > int(m["year_max"]):
+                return
+            start = lo
+            grid.set_values(range(start, start + 2 * span + 1), year)
+
+        grid.scrolled.connect(shift)
 
         action = QWidgetAction(menu)
         action.setDefaultWidget(panel)
@@ -1004,14 +1054,36 @@ class _DateRangePicker(QWidget):
         QTimer.singleShot(0, edit.setFocus)
 
     def _fill_month_menu(self) -> None:
-        """月份面板：4×3 网格，一眼看全年。"""
+        """月份面板：可编辑输入框 + 4×3 网格，点选和键入都能跳转。"""
+        t, m = self._texts, self._metrics
         menu = self._month_menu
         menu.clear()
-        _year, month = self._grid.page()
+        year, month = self._grid.page()
 
         panel = QWidget(menu)
         box = QVBoxLayout(panel)
         box.setContentsMargins(4, 4, 4, 4)
+        box.setSpacing(2)
+
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        edit = _YearEdit(panel)
+        edit.setObjectName("YearEdit")
+        edit.setPlaceholderText(str(t["month_placeholder"]))
+        edit.setFixedWidth(int(m["year_edit_width"]))
+        edit.setFixedHeight(int(m["year_edit_height"]))
+        edit.setValidator(QIntValidator(1, 12, edit))
+        edit.setText(str(month))
+        edit.setToolTip(str(t["month_hint"]))
+        jump = QPushButton(str(t["jump"]), panel)
+        jump.setObjectName("YearJump")
+        jump.setCursor(Qt.PointingHandCursor)
+        jump.setFixedHeight(int(m["year_edit_height"]))
+        row.addWidget(edit)
+        row.addWidget(jump)
+        row.addStretch(1)
+        box.addLayout(row)
+
         grid = _ChoiceGrid(4, range(1, 13), month, str(t["month_suffix"]), panel,
                            min_width=m["choice_min_width"])
         box.addWidget(grid)
@@ -1020,8 +1092,17 @@ class _DateRangePicker(QWidget):
         action.setDefaultWidget(panel)
         menu.addAction(action)
 
-        grid.picked.connect(
-            lambda m: self._goto(self._grid.page()[0], m))
+        def submit() -> None:
+            text = edit.text().strip()
+            if text.isdigit() and 1 <= int(text) <= 12:
+                self._goto(year, int(text))
+                menu.close()
+
+        edit.returnPressed.connect(submit)
+        jump.clicked.connect(submit)
+        grid.picked.connect(lambda picked: self._goto(year, picked))
+        # 菜单弹出后直接可键入月份，不用再点一次输入框。
+        QTimer.singleShot(0, edit.setFocus)
 
     def _goto(self, year: int, month: int) -> None:
         # 不再限制在固定年份窗口内：输入框可以跳到任意年份。
@@ -1115,6 +1196,41 @@ class _DateRangePicker(QWidget):
         self._summary.setText(f"{left}  \u2192  {right}")
 
 
+class _PopupOutsideFilter(QObject):
+    """Close a child-widget popup when the user presses outside it.
+
+    :class:`_FilterPopup` lives inside the table window (so it travels with
+    the window and can never fall behind it), which means Qt can no longer
+    auto-close it the way a ``Qt.Popup`` window would.  This application
+    filter restores that behaviour and also re-clamps the popup after the
+    host window shrinks.
+    """
+
+    def __init__(self, popup: QWidget) -> None:
+        super().__init__(popup)
+        self._popup = popup
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if not isinstance(obj, QWidget):
+            return False
+        t = event.type()
+        if t == QEvent.MouseButtonPress:
+            w = obj
+            while w is not None:
+                if w is self._popup:
+                    return False
+                w = w.parentWidget()
+            if self._popup.isVisible():
+                self._popup.close()
+        elif t == QEvent.Resize and obj is self._popup.parentWidget():
+            QTimer.singleShot(0, self._popup._relayout)
+        elif t in (QEvent.Hide, QEvent.WindowDeactivate) \
+                and obj is self._popup.window():
+            if self._popup.isVisible():
+                self._popup.close()
+        return False
+
+
 class _FilterPopup(QFrame):
     """Excel-style column filter popup with search + checkable values
     or numeric comparison (one or more AND-combined conditions).
@@ -1126,9 +1242,14 @@ class _FilterPopup(QFrame):
     date; either bound can be left open. The three modes (text / numeric /
     date) are mutually exclusive per column.
 
-    Implemented as a :class:`QFrame` with the ``Qt.Popup`` window flag rather
-    than as a :class:`QMenu`, because ``QMenu` interferes with IME composition
-    (typing Chinese / Japanese / Korean inside the search box did not work).
+    Implemented as a :class:`QFrame` child of the table's top-level window
+    rather than as a :class:`QMenu`, because ``QMenu`` interferes with IME
+    composition (typing Chinese / Japanese / Korean inside the search box did
+    not work).  Being a child widget (instead of a separate ``Qt.Popup``
+    window) keeps it glued to the window -- including while the native title
+    bar is dragged -- and stops it from being hidden behind the window.
+    :class:`_PopupOutsideFilter` restores the click-outside-to-close
+    behaviour that the popup window flag used to provide.
 
     Default semantics: when no prior filter exists, the popup opens with all
     list items visually checked but is treated as "no filter active" until
@@ -1152,7 +1273,7 @@ class _FilterPopup(QFrame):
                  texts: dict | None = None,
                  metrics: dict | None = None,
                  parent: QWidget | None = None) -> None:
-        super().__init__(parent, Qt.Popup)
+        super().__init__(parent)
         self._texts: dict = {**DEFAULT_TEXTS, **(texts or {})}
         self._metrics: dict = {**DEFAULT_METRICS, **(metrics or {})}
         t, m = self._texts, self._metrics
@@ -1160,8 +1281,8 @@ class _FilterPopup(QFrame):
         self.setFrameShape(QFrame.NoFrame)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self._column = column
-        # Anchor (global) the popup was opened at; every later re-layout is
-        # derived from it so repeated resize/move is idempotent.
+        # Anchor (window-local) the popup was opened at; every later
+        # re-layout is derived from it so repeated resize/move is idempotent.
         self._anchor_pos: QPoint | None = None
         # Zero-delay timer used to defer re-layouts to the next event-loop
         # tick (see ``_relayout``). Owned by the popup so it dies with it.
@@ -1169,6 +1290,8 @@ class _FilterPopup(QFrame):
         self._relayout_timer.setSingleShot(True)
         self._relayout_timer.setInterval(0)
         self._relayout_timer.timeout.connect(self._relayout)
+        # Click-outside / window-resize watcher, installed only while shown.
+        self._outside_filter = _PopupOutsideFilter(self)
         self._all_values = sorted({str(v) for v in values},
                                   key=lambda s: (s == "", s.lower()))
         # Text-mode state.
@@ -1181,8 +1304,6 @@ class _FilterPopup(QFrame):
             self._selected: set[str] = set()
         else:
             self._selected = set(selected)
-        # Numeric-mode state.
-        self._numeric_mode = numeric
         self._condition_rows: list[_NumericConditionRow] = []
 
         self.setStyleSheet(
@@ -1342,11 +1463,11 @@ class _FilterPopup(QFrame):
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(6)
-        # 关掉布局对顶层窗口的尺寸约束（默认 SetDefaultConstraint）。
+        # 关掉布局的尺寸约束（默认 SetDefaultConstraint）。
         # 切换「文本 / 数字 / 日期」模式时会 show()/hide() 一批子控件，布局
-        # 随之 invalidate；默认约束下 Qt 会自己给这个 Qt.Popup 顶层窗口做
+        # 随之 invalidate；默认约束下 Qt 会自己给这个弹窗做
         # setGeometry/adjustSize，而此刻布局只更新了一半（宽度还是旧模式、
-        # 高度已是新模式的），Windows 会按真实最小尺寸回夹并打印：
+        # 高度已是新模式的），窗口系统会按真实最小尺寸回夹并打印：
         #   QWindowsWindow::setGeometry: Unable to set geometry ...
         # 弹窗尺寸完全由 _relayout() 负责设置，所以这里不需要 Qt 再插手。
         v.setSizeConstraint(QLayout.SetNoConstraint)
@@ -1579,15 +1700,21 @@ class _FilterPopup(QFrame):
         else:
             self._relayout()
 
+    def _host_rect(self) -> QRect:
+        """Available area (window-local) the popup may occupy."""
+        win = self.window()
+        if win is None:
+            return QRect()
+        return win.rect().adjusted(4, 4, -4, -4)
+
     def _relayout(self) -> None:
-        """Resize the popup to the current mode and keep it on screen.
+        """Resize the popup to the current mode and keep it inside the window.
 
         The target size is ``sizeHint()`` *expanded* to ``minimumSizeHint()``
-        so we never ask the window system for a geometry that is smaller than
-        what the layout needs. Together with the layout's
-        ``SetNoConstraint``, this keeps Windows from clamping our geometry
-        (which would print "QWindowsWindow::setGeometry: Unable to set
-        geometry ...") when the popup switches between modes.
+        so the layout never gets less room than it needs.  The popup is a
+        child of the window, so all coordinates are window-local: moving the
+        window needs no work (it travels with it), only its own size / anchor
+        changes do.
         """
         self.ensurePolished()
         lay = self.layout()
@@ -1597,13 +1724,12 @@ class _FilterPopup(QFrame):
         if not self.isVisible():
             self.resize(want)
             return
-        anchor = self._anchor_pos if self._anchor_pos is not None else self.pos()
-        screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
-        if screen is None:
+        rect = self._host_rect()
+        if rect.isNull():
             return
-        rect = screen.availableGeometry()
-        w = min(want.width(), rect.width() - 8)
-        h = min(want.height(), rect.height() - 8)
+        anchor = self._anchor_pos if self._anchor_pos is not None else self.pos()
+        w = min(want.width(), rect.width())
+        h = min(want.height(), rect.height())
         x, y = self._clamp_pos(anchor, QSize(w, h), rect)
         if (x, y, w, h) != (self.x(), self.y(), self.width(), self.height()):
             self.setGeometry(x, y, w, h)
@@ -1822,18 +1948,29 @@ class _FilterPopup(QFrame):
         self.close()
 
     def show_at(self, global_pos: QPoint) -> None:
-        self._anchor_pos = QPoint(global_pos)
+        owner = self.parentWidget()
+        win = owner.window() if owner is not None else None
+        if win is None:
+            self.close()
+            return
+        # Re-parent to the top-level window: the popup then shares the
+        # window's native surface, so it follows every window move (even
+        # during a native title-bar drag) and can never be covered by it.
+        if self.parentWidget() is not win:
+            self.setParent(win)
+        self._anchor_pos = win.mapFromGlobal(global_pos)
         self.ensurePolished()
         lay = self.layout()
         if lay is not None:
             lay.activate()
         size = self.sizeHint().expandedTo(self.minimumSizeHint())
-        screen = QApplication.screenAt(global_pos)
-        rect = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-        x, y = self._clamp_pos(global_pos, size, rect)
-        self.setGeometry(x, y, size.width(), size.height())
+        rect = self._host_rect()
+        w = min(size.width(), rect.width())
+        h = min(size.height(), rect.height())
+        x, y = self._clamp_pos(self._anchor_pos, QSize(w, h), rect)
+        self.setGeometry(x, y, w, h)
         self.show()
-        # 首次 polish 后布局尺寸可能还会微调，下一帧再对齐一次本次（幂等）
+        self.raise_()
         self._relayout_timer.start()
         if self._numeric_toggle is not None and self._numeric_toggle.isChecked() \
                 and self._condition_rows:
@@ -1879,7 +2016,16 @@ class _FilterPopup(QFrame):
         # is a one-click shortcut for "filter to this single value".
         self.close()
 
+    def showEvent(self, event) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self._outside_filter)
+        super().showEvent(event)
+
     def hideEvent(self, event) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self._outside_filter)
         # Reset hover overlay state on close so the next open starts clean.
         self._hover_only_btn.hide()
         self._hover_only_target = None
@@ -1993,19 +2139,6 @@ class _FilterHeaderView(QHeaderView):
         x = (self.sectionViewportPosition(logical_index)
              + self.sectionSize(logical_index) - size - margin)
         return QRect(x, (self.height() - size) // 2, size, size)
-
-    def _sort_rect(self, logical_index: int) -> QRect:
-        skip_filter = logical_index in self._skip_filter_columns
-        section_right = (self.sectionViewportPosition(logical_index)
-                         + self.sectionSize(logical_index))
-        if skip_filter:
-            right_anchor = section_right - self.FILTER_MARGIN
-        else:
-            right_anchor = (section_right - self.FILTER_MARGIN
-                            - self.FILTER_SIZE - self.SORT_GAP)
-        x = right_anchor - self.SORT_W
-        y = (self.height() - self.SORT_H) // 2
-        return QRect(x, y, self.SORT_W, self.SORT_H)
 
     def _icon_rect(self, logical_index: int) -> QRect:
         # Kept for backwards compatibility (used by mousePressEvent).

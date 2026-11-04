@@ -263,6 +263,7 @@ cb.set_theme({**THEMES["tencent"], "border_radius": 8})
 
 带「Excel 式列筛选」的表格：文本勾选、数值比较（多条 AND）、日期范围三种模式；
 列头可拖拽重排、点击排序；可选行勾选、单元格编辑、行内操作按钮。
+日期筛选面板的年份/月份既可在网格中点选，也可直接键入跳转；年份面板支持滚轮逐年平移窗口（2016→2015…／2036→2037…）。
 
 ```python
 from widgets import MyTable, ActionDelegate, ACTION_STYLES
@@ -299,7 +300,8 @@ table.setItemDelegateForColumn(6, d)
 
 日期选择器：`preset_7d` `preset_30d` `preset_month` `preset_year` `preset_all`
 `prev_month_tip` `next_month_tip` `pick_year_tip` `pick_month_tip` `today` `today_tip`
-`year_placeholder` `jump` `year_hint`（含 `{min}` `{max}`）`year_data_hint`
+`year_placeholder` `month_placeholder` `jump` `year_hint`（含 `{min}` `{max}`）
+`month_hint` `year_data_hint`
 （含 `{lo}` `{hi}`）`unbounded` `no_range` `year_suffix` `month_suffix`
 `date_format`（默认 `yyyy-MM-dd`）`weekdays`（7 个元素的元组）
 
@@ -321,7 +323,7 @@ table.setItemDelegateForColumn(6, d)
 | `cal_cell_w` / `cal_cell_h` / `cal_header_h` | 34 / 28 / 24 | 日历格子 / 星期行 |
 | `year_span` | 10 | 年份网格为「当前年 ± year_span」 |
 | `year_min` / `year_max` | 1900 / 2999 | 年份输入框校验范围 |
-| `year_edit_width` / `year_edit_height` | 84 / 24 | 年份输入框 |
+| `year_edit_width` / `year_edit_height` | 84 / 24 | 年份 / 月份输入框 |
 | `choice_min_width` | 58 | 年 / 月网格按钮最小宽 |
 | `list_min_height` / `list_max_height` / `list_min_width` | 180 / 280 / 220 | 筛选列表 |
 | `action_radius` 等 | 6 / 6 / 4 / 80 / 30 | 行内按钮默认值（见 `ActionDelegate`） |
