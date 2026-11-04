@@ -7,6 +7,15 @@ from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import QWidget
 
 
+DEFAULT_STYLE: dict[str, object] = {
+    "background":  "#ea4335",
+    "text_color":  "#ffffff",
+    "font_size":   None,   # None = inherit the widget font
+    "min_size":    20,
+    "padding":     8,
+}
+
+
 class Badge(QWidget):
     """A small coloured badge attached to the top-right corner of a target
     widget (typically a ``QPushButton`` or ``QToolButton``).
@@ -24,7 +33,7 @@ class Badge(QWidget):
 
     Usage::
 
-        badge = Badge(target=button, color="#ea4335")
+        badge = Badge(target=button, style={"background": "#ea4335"})
         badge.set_count(5)
 
         # Auto-track a QAbstractItemModel (via Qt signals)
@@ -51,11 +60,12 @@ class Badge(QWidget):
     _poll_ms: int = 300
 
     def __init__(self, target: QWidget | None = None,
-                 *, color: str = "#ea4335",
-                 text_color: str = "#ffffff",
+                 *, style: dict | None = None,
+                 background: str | None = None,
+                 text_color: str | None = None,
                  max_count: int = 999,
-                 min_size: int = 20,
-                 padding: int = 8,
+                 min_size: int | None = None,
+                 padding: int | None = None,
                  font_size: int | None = None,
                  overflow_suffix: str = "+",
                  offset: tuple[int, int] = (0, 0),
@@ -73,19 +83,26 @@ class Badge(QWidget):
         self._target = target
         self._count = 0
         self._max_count = max_count
-        self._min_size = min_size
-        self._padding = max(0, int(padding))
         self._overflow_suffix = overflow_suffix
         self._offset = QPoint(int(offset[0]), int(offset[1]))
-        self._current_diameter = min_size
-        self._color = QColor(color)
-        self._text_color = QColor(text_color)
         self._source = None
 
-        if font_size is not None:
-            font = self.font()
-            font.setPixelSize(int(font_size))
-            self.setFont(font)
+        # Style dict is the single source of truth; the individual keywords
+        # below are convenience overrides of its keys.
+        self._style: dict = {**DEFAULT_STYLE, **(style or {})}
+        for key, value in (("background", background),
+                           ("text_color", text_color),
+                           ("min_size", min_size),
+                           ("padding", padding),
+                           ("font_size", font_size)):
+            if value is not None:
+                self._style[key] = value
+        self._min_size = int(self._style["min_size"])
+        self._padding = max(0, int(self._style["padding"]))
+        self._current_diameter = self._min_size
+        self._background = QColor(str(self._style["background"]))
+        self._text_color = QColor(str(self._style["text_color"]))
+        self._apply_font()
 
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setVisible(False)
@@ -119,13 +136,38 @@ class Badge(QWidget):
 
     count = property(lambda self: self._count, set_count)
 
-    def set_color(self, color: str) -> None:
-        self._color = QColor(color)
+    def style(self) -> dict:
+        """Return a copy of the current style dictionary."""
+        return dict(self._style)
+
+    def set_style(self, style: dict) -> None:
+        """Merge ``style`` into the current style dict and re-apply it."""
+        self._style.update(style)
+        self._min_size = int(self._style["min_size"])
+        self._padding = max(0, int(self._style["padding"]))
+        self._background = QColor(str(self._style["background"]))
+        self._text_color = QColor(str(self._style["text_color"]))
+        self._apply_font()
+        self._update_size()
+        self._reposition()
+        self.update()
+
+    def set_background(self, color: str) -> None:
+        self._style["background"] = color
+        self._background = QColor(color)
         self.update()
 
     def set_text_color(self, color: str) -> None:
+        self._style["text_color"] = color
         self._text_color = QColor(color)
         self.update()
+
+    def _apply_font(self) -> None:
+        size = self._style.get("font_size")
+        if size:
+            font = self.font()
+            font.setPixelSize(int(size))
+            self.setFont(font)
 
     def set_max_count(self, max_count: int) -> None:
         self._max_count = max_count
@@ -286,7 +328,7 @@ class Badge(QWidget):
 
         # pill shape when wider than tall, circle otherwise
         painter.setPen(Qt.NoPen)
-        painter.setBrush(self._color)
+        painter.setBrush(self._background)
         if body.width() > body.height():
             painter.drawRoundedRect(body, body.height() // 2, body.height() // 2)
         else:

@@ -3,8 +3,10 @@
 PySide6 实现的四个可复用控件：**Badge**（数字角标）、**MyCombo**（多选下拉）、
 **MyTable**（带列筛选 / 勾选 / 行内操作的表）、**DragBar**（可拖拽工具栏）。
 
-设计原则：**控件不写死任何文案 / 尺寸 / 颜色**。每个控件都有一套默认配置常量，
-在构造时用关键字参数或一个字典覆盖即可，默认外观与行为保持不变。
+设计原则：**控件不写死任何文案 / 尺寸 / 颜色**。四个控件统一用 `style`
+字典描述外观，构造时传入 `style=`，运行时用 `style()` / `set_style()`；
+MyCombo / MyTable 另外用 `texts` / `metrics` 描述文案与尺寸，并配套
+`texts()` / `set_texts()`、`metrics()` / `set_metrics()`。
 
 ```bash
 uv run python demo.py     # 运行四个控件的演示
@@ -48,7 +50,7 @@ table = MyTable(metrics={"row_height": 34})          # 只改行高
 table.set_data(["城市", "人口"], [["北京", 2189], ["上海", 2487]])
 
 btn = QPushButton("下载")
-Badge(target=btn, color="#1a73e8").bind(["a", "b"])  # 角标自动跟随列表长度
+Badge(target=btn, background="#1a73e8").bind(["a", "b"])  # 角标自动跟随列表长度
 
 bar = DragBar(style={"background": "#fafafa", "border_radius": 8})
 bar.add_item("folder", "文件夹", "folder")
@@ -81,16 +83,16 @@ sys.exit(app.exec())
 | --- | --- |
 | `texts` | 所有可见文案（按钮、占位符、提示、tooltip、后缀） |
 | `metrics` | 所有尺寸（高度、宽度、内边距、图标大小、行高） |
-| `theme` / `style` | 所有颜色（背景、边框、主色、悬停色） |
+| `style` | 所有外观（背景、边框、主色、悬停色、圆角） |
 
 三者都是「默认 dict + 你的 dict」浅合并：**只传需要改的键**就行。
 
 ```python
 from widgets import (
-    MyCombo, COMBO_TEXTS, COMBO_METRICS,
-    MyTable, TABLE_TEXTS, TABLE_METRICS,
+    MyCombo, COMBO_STYLE, COMBO_TEXTS, COMBO_METRICS,
+    MyTable, TABLE_STYLE, TABLE_TEXTS, TABLE_METRICS,
     DragBar, DRAGBAR_STYLE,
-    Badge,
+    Badge, BADGE_STYLE,
 )
 ```
 
@@ -112,7 +114,7 @@ bar = DragBar(trash_icon="✖")
 ```python
 from widgets import Badge
 
-Badge(target=btn, color="#ea4335").bind(["a", "b", "c"])   # → 3
+Badge(target=btn, style={"background": "#ea4335"}).bind(["a", "b", "c"])   # → 3
 ```
 
 ### 构造参数
@@ -120,12 +122,13 @@ Badge(target=btn, color="#ea4335").bind(["a", "b", "c"])   # → 3
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `target` | `None` | 依附的控件（角标会父化到它的顶层窗口，不被裁剪） |
-| `color` | `"#ea4335"` | 背景色 |
-| `text_color` | `"#ffffff"` | 文字色 |
+| `style` | `DEFAULT_STYLE` | 外观字典（`background` / `text_color` / `font_size` / `min_size` / `padding`） |
+| `background` | `None` | 覆盖 `style["background"]`：背景色 |
+| `text_color` | `None` | 覆盖 `style["text_color"]`：文字色 |
 | `max_count` | `999` | 超过后显示为 `999+` |
-| `min_size` | `20` | 最小直径（px） |
-| `padding` | `8` | 文字两侧留白，重新计算直径时使用 |
-| `font_size` | `None` | 像素字号，`None` 用控件默认字体 |
+| `min_size` | `None` | 覆盖 `style["min_size"]`：最小直径（px） |
+| `padding` | `None` | 覆盖 `style["padding"]`：文字两侧留白 |
+| `font_size` | `None` | 覆盖 `style["font_size"]`：像素字号 |
 | `overflow_suffix` | `"+"` | 溢出后缀，可改成 `"…"` 或 `"+"` |
 | `offset` | `(0, 0)` | 相对右上角的额外偏移 |
 | `poll_ms` | `None` | 轮询间隔；传值等价于调用 `Badge.set_poll_interval()` |
@@ -137,7 +140,8 @@ Badge(target=btn, color="#ea4335").bind(["a", "b", "c"])   # → 3
 | `bind(source)` | 绑定数据源，返回 `self` 便于链式调用 |
 | `refresh()` | 立即重新读取数据源 |
 | `set_count(n)` / `count` | 设置数字（`<=0` 时自动隐藏） |
-| `set_color(c)` / `set_text_color(c)` | 改配色 |
+| `style()` / `set_style(d)` | 读取 / 合并外观配置 |
+| `set_background(c)` / `set_text_color(c)` | 改配色 |
 | `set_max_count(n)` | 改溢出上限 |
 | `Badge.set_poll_interval(ms)` | **类方法**，调整共享轮询间隔（默认 300 ms） |
 
@@ -185,8 +189,9 @@ cb.selectionChanged.connect(lambda v: print(v))
 | --- | --- | --- |
 | `parent` | `None` | 父控件 |
 | `placeholder` | `texts["placeholder"]` | 空状态提示，覆盖 `texts["placeholder"]` |
-| `theme` | `DEFAULT_THEME` | 配色字典（见下） |
+| `style` | `DEFAULT_STYLE` | 外观字典（见下） |
 | `texts` | `DEFAULT_TEXTS` | 文案字典 |
+| `metrics` | `DEFAULT_METRICS` | 尺寸字典；下面单列的尺寸参数会覆盖它 |
 | `search_in_popup` | `True` | 面板内是否显示搜索框 |
 | `string_only` | `False` | 解锁输入框为自由文本模式 |
 | `columns` | `2` | 面板列数 |
@@ -215,15 +220,15 @@ cb.selectionChanged.connect(lambda v: print(v))
 | `hover_only` / `hover_only_tip` | `仅筛此项` / `把筛选替换为只看这一项` |
 | `separator` | `, ` |
 
-### 主题
+### 外观
 
-`DEFAULT_THEME` / `GOOGLE_THEME` / `TENCENT_THEME` / `GITHUB_THEME`，
-也可用 `THEMES["github"]` 取。全部是完整字典，取一份改单个键即可。
+`COMBO_STYLE` / `GOOGLE_STYLE` / `TENCENT_STYLE` / `GITHUB_STYLE`，
+也可用 `COMBO_STYLES["github"]` 取。全部是完整字典，取一份改单个键即可。
 
 ```python
-from widgets import THEMES
+from widgets import COMBO_STYLES
 
-cb.set_theme({**THEMES["tencent"], "border_radius": 8})
+cb.set_style({**COMBO_STYLES["tencent"], "border_radius": 8})
 ```
 
 主要键：`background`、`text_color`、`border_color`、`border_color_focus`、
@@ -250,10 +255,11 @@ cb.set_theme({**THEMES["tencent"], "border_radius": 8})
 | `value()` | 输入框当前文本（`string_only` 模式下即用户输入） |
 | `line_edit()` | 取出内部 `QLineEdit`（可挂 validator） |
 | `show_popup()` / `hide_popup()` | 手动开关面板 |
-| `set_theme(d)` / `set_columns(n)` / `set_max_col_chars(n)` | 运行时调整 |
+| `set_style(d)` / `set_columns(n)` / `set_max_col_chars(n)` | 运行时调整 |
+| `set_texts(d)` / `set_metrics(d)` | 运行时合并文案 / 尺寸并立即生效 |
 | `set_search_in_popup(b)` / `is_search_in_popup()` | 面板内搜索框开关 |
 | `set_string_only(b)` / `is_string_only()` | 自由文本模式开关 |
-| `theme()` / `texts()` / `metrics()` | 返回当前配置副本 |
+| `style()` / `texts()` / `metrics()` | 返回当前配置副本 |
 
 信号：`selectionChanged(list)`、`popupShown()`、`popupHidden()`。
 
@@ -289,6 +295,7 @@ table.setItemDelegateForColumn(6, d)
 | `skip_filter_columns` | `()` | 不显示筛选图标的列（如操作列） |
 | `texts` | `DEFAULT_TEXTS` | 文案字典 |
 | `metrics` | `DEFAULT_METRICS` | 尺寸字典 |
+| `style` | `DEFAULT_STYLE` | 表体 / 表头配色、圆角、滚动条颜色 |
 
 ### `texts` 键
 
@@ -328,6 +335,13 @@ table.setItemDelegateForColumn(6, d)
 | `list_min_height` / `list_max_height` / `list_min_width` | 180 / 280 / 220 | 筛选列表 |
 | `action_radius` 等 | 6 / 6 / 4 / 80 / 30 | 行内按钮默认值（见 `ActionDelegate`） |
 
+### `style` 键
+
+`background` `alternate_background` `text_color` `gridline_color` `border_color`
+`border_radius` `selection_bg` `selection_text_color` `item_hover_bg`
+`header_background` `header_text_color` `header_hover_bg` `header_pressed_bg`
+`header_separator_color` `header_border_color` `scrollbar_handle` `scrollbar_handle_hover`
+
 ### 方法
 
 | 方法 | 说明 |
@@ -342,6 +356,8 @@ table.setItemDelegateForColumn(6, d)
 | `set_column_numeric(col, on=True)` | 该列启用数值比较模式 |
 | `clear_filters()` | 清除所有列的筛选 |
 | `set_filter_skipped_columns(cols)` | 运行时设置不显示漏斗的列 |
+| `style()` / `set_style(d)` | 读取 / 合并外观配置并立即生效 |
+| `texts()` / `set_texts(d)` / `metrics()` / `set_metrics(d)` | 读取 / 合并文案 / 尺寸 |
 
 信号：`rowsDeleted(list)`、`rowChecked(int, bool)`、`cellEdited(int, int, object)`。
 
@@ -424,7 +440,8 @@ bar.item_moved.connect(lambda name, idx: print(name, idx))
 | `remove_item(name)` / `clear()` | 删除 |
 | `items()` / `selected_items()` | 当前项 / 选中项名 |
 | `select_all()` / `deselect_all()` | 选择 |
-| `set_spacing(px)` / `set_style(d)` | 运行时调整，`set_style` 会立刻换肤 |
+| `style()` / `set_style(d)` | 读取 / 合并外观配置，`set_style` 会立刻换肤 |
+| `set_spacing(px)` | 调整图标间距 |
 | `snapshot()` | 记录当前项为重置基线 |
 | `reset()` | 恢复到基线 |
 

@@ -1,31 +1,31 @@
 """四个自绘控件：Badge / MyCombo / MyTable / DragBar。
 
-每个控件都有一套默认配置（文案 / 尺寸 / 颜色），可以在构造时用关键字
-或 ``texts`` / ``metrics`` / ``style`` 字典覆盖，默认外观保持不变。
+四个控件统一支持 ``style=`` 外观字典，以及 ``style()`` / ``set_style()``
+读写；MyCombo / MyTable 还支持 ``texts=`` 文案字典与 ``metrics=`` 尺寸
+字典，以及对应的 ``texts()`` / ``set_texts()``、``metrics()`` /
+``set_metrics()``。
 """
 from .badge import Badge, BadgeDict, BadgeList
+from .badge import DEFAULT_STYLE as BADGE_STYLE
 from .drag_bar import DragBar, DragBarItem
 from .my_combo import (
     DEFAULT_METRICS as COMBO_METRICS,
-)
-from .my_combo import (
+    DEFAULT_STYLE as COMBO_STYLE,
     DEFAULT_TEXTS as COMBO_TEXTS,
-)
-from .my_combo import (
-    DEFAULT_THEME,
-    GITHUB_THEME,
-    GOOGLE_THEME,
-    TENCENT_THEME,
-    THEMES,
+    GITHUB_STYLE,
+    GOOGLE_STYLE,
+    STYLES as COMBO_STYLES,
+    TENCENT_STYLE,
     MyCombo,
 )
 from .my_table import (
+    ACTION_STYLES,
     DEFAULT_METRICS as TABLE_METRICS,
-)
-from .my_table import (
+    DEFAULT_STYLE as TABLE_STYLE,
     DEFAULT_TEXTS as TABLE_TEXTS,
+    ActionDelegate,
+    MyTable,
 )
-from .my_table import ACTION_STYLES, ActionDelegate, MyTable
 
 #: DragBar 的默认配置（字体 / 尺寸 / 图标字符 / 配色）。
 DRAGBAR_STYLE: dict = DragBar.DEFAULT_STYLE
@@ -35,19 +35,21 @@ __all__ = [
     "Badge",
     "BadgeList",
     "BadgeDict",
+    "BADGE_STYLE",
     # ---- MyCombo ----
     "MyCombo",
-    "DEFAULT_THEME",
-    "GOOGLE_THEME",
-    "TENCENT_THEME",
-    "GITHUB_THEME",
-    "THEMES",
+    "COMBO_STYLE",
+    "GOOGLE_STYLE",
+    "TENCENT_STYLE",
+    "GITHUB_STYLE",
+    "COMBO_STYLES",
     "COMBO_TEXTS",
     "COMBO_METRICS",
     # ---- MyTable ----
     "MyTable",
     "ActionDelegate",
     "ACTION_STYLES",
+    "TABLE_STYLE",
     "TABLE_TEXTS",
     "TABLE_METRICS",
     # ---- DragBar ----

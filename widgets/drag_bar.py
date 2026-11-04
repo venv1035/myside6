@@ -660,6 +660,10 @@ class DragBar(QWidget):
 
     # ── style ────────────────────────────────────────────────────────────
 
+    def style(self) -> dict:
+        """Return a copy of the current style dictionary."""
+        return dict(self._style)
+
     def set_style(self, style: dict) -> None:
         """Merge *style* into the current options and re-skin the bar."""
         self._style.update(style)

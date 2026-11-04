@@ -129,19 +129,19 @@ def page_badge() -> QWidget:
 
     btn_add, btn_clr = QPushButton("添加"), QPushButton("清空")
     data_list = ["a", "b", "c"]
-    Badge(target=btn_add, color="#1a73e8").bind(data_list)
+    Badge(target=btn_add, background="#1a73e8").bind(data_list)
     btn_add.clicked.connect(lambda: data_list.append(f"x{len(data_list)}"))
     btn_clr.clicked.connect(data_list.clear)
 
     btn_inc, btn_dec = QPushButton("+1"), QPushButton("-1")
     counter = [5]
-    Badge(target=btn_inc, color="#fb8c00").bind(lambda: counter[0])
+    Badge(target=btn_inc, background="#fb8c00").bind(lambda: counter[0])
     btn_inc.clicked.connect(lambda: counter.__setitem__(0, counter[0] + 1))
     btn_dec.clicked.connect(lambda: counter.__setitem__(0, max(0, counter[0] - 1)))
 
     btn_add_row, btn_rm_row = QPushButton("插入行"), QPushButton("删除末行")
     model = QStandardItemModel(3, 1)
-    Badge(target=btn_add_row, color="#8e24aa").bind(model)
+    Badge(target=btn_add_row, background="#8e24aa").bind(model)
     btn_add_row.clicked.connect(lambda: model.insertRow(model.rowCount()))
     btn_rm_row.clicked.connect(
         lambda: model.removeRow(model.rowCount() - 1) if model.rowCount() > 0 else None

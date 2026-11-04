@@ -236,6 +236,29 @@ DEFAULT_METRICS: dict[str, int] = {
 }
 
 
+# Default palette of the table shell.  Same convention as the other widgets:
+# a flat dict merged through ``style=`` / :meth:`MyTable.set_style`.
+DEFAULT_STYLE: dict[str, object] = {
+    "background":            "#ffffff",
+    "alternate_background":  "#f8f9fa",
+    "text_color":            "#202124",
+    "gridline_color":        "#e8eaed",
+    "border_color":          "#dadce0",
+    "border_radius":         8,
+    "selection_bg":          "#e8f0fe",
+    "selection_text_color":  "#1a73e8",
+    "item_hover_bg":         "#f1f3f4",
+    "header_background":     "#f8f9fa",
+    "header_text_color":     "#3c4043",
+    "header_hover_bg":       "#f1f3f4",
+    "header_pressed_bg":     "#e8eaed",
+    "header_separator_color": "#e8eaed",
+    "header_border_color":   "#dadce0",
+    "scrollbar_handle":      "#c4c7c5",
+    "scrollbar_handle_hover": "#9aa0a6",
+}
+
+
 # Explicit date formats accepted by :func:`_parse_date`, tried in order
 # after the ISO parser. ``Qt.ISODate`` ("yyyy-MM-dd" plus ISO datetimes)
 # is always attempted first.
@@ -2261,7 +2284,8 @@ class MyTable(QTableView):
     def __init__(self, parent: QWidget | None = None,
                  *, skip_filter_columns: Iterable[int] = (),
                  texts: dict | None = None,
-                 metrics: dict | None = None) -> None:
+                 metrics: dict | None = None,
+                 style: dict | None = None) -> None:
         """
         Parameters
         ----------
@@ -2272,10 +2296,14 @@ class MyTable(QTableView):
         metrics : dict, optional
             Any subset of :data:`DEFAULT_METRICS` -- row height, header,
             calendar cell size, popup list size, ...
+        style : dict, optional
+            Any subset of :data:`DEFAULT_STYLE` -- table / header palette,
+            border radius and scrollbar colours.
         """
         super().__init__(parent)
         self._texts: dict = {**DEFAULT_TEXTS, **(texts or {})}
         self._metrics: dict = {**DEFAULT_METRICS, **(metrics or {})}
+        self._style: dict = {**DEFAULT_STYLE, **(style or {})}
         self._proxy = _MultiColumnFilterProxy(self)
         super().setModel(self._proxy)
 
@@ -2325,49 +2353,91 @@ class MyTable(QTableView):
     # ------------------------------------------------------------------
     def _apply_style(self) -> None:
         m = self._metrics
+        s = self._style
         self.setStyleSheet(
             f"""
             QTableView {{
-                background: #ffffff;
-                alternate-background-color: #f8f9fa;
-                gridline-color: #e8eaed;
-                border: 1px solid #dadce0;
-                border-radius: 8px;
-                selection-background-color: #e8f0fe;
-                selection-color: #202124;
+                background: {s['background']};
+                alternate-background-color: {s['alternate_background']};
+                gridline-color: {s['gridline_color']};
+                border: 1px solid {s['border_color']};
+                border-radius: {s['border_radius']}px;
+                selection-background-color: {s['selection_bg']};
+                selection-color: {s['text_color']};
                 font-size: {m['table_font_size']}px;
             }}
             QTableView::item {{ padding: 6px 8px; border: none; }}
-            QTableView::item:hover {{ background: #f1f3f4; }}
-            QTableView::item:selected {{ background: #e8f0fe; color: #1a73e8; }}
+            QTableView::item:hover {{ background: {s['item_hover_bg']}; }}
+            QTableView::item:selected {{
+                background: {s['selection_bg']};
+                color: {s['selection_text_color']};
+            }}
 
             QHeaderView::section {{
-                background: #f8f9fa;
-                color: #3c4043;
+                background: {s['header_background']};
+                color: {s['header_text_color']};
                 padding: 6px {m['header_pad_right']}px 6px {m['header_pad_left']}px;
                 border: none;
-                border-right: 1px solid #e8eaed;
-                border-bottom: 1px solid #dadce0;
+                border-right: 1px solid {s['header_separator_color']};
+                border-bottom: 1px solid {s['header_border_color']};
                 font-weight: 600;
                 font-size: {m['header_font_size']}px;
             }}
-            QHeaderView::section:hover {{ background: #f1f3f4; }}
-            QHeaderView::section:pressed {{ background: #e8eaed; }}
+            QHeaderView::section:hover {{ background: {s['header_hover_bg']}; }}
+            QHeaderView::section:pressed {{ background: {s['header_pressed_bg']}; }}
 
             QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
             QScrollBar::handle:vertical {{
-                background: #c4c7c5; border-radius: 5px; min-height: 24px;
+                background: {s['scrollbar_handle']};
+                border-radius: 5px; min-height: 24px;
             }}
-            QScrollBar::handle:vertical:hover {{ background: #9aa0a6; }}
+            QScrollBar::handle:vertical:hover {{
+                background: {s['scrollbar_handle_hover']};
+            }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
             QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
             QScrollBar::handle:horizontal {{
-                background: #c4c7c5; border-radius: 5px; min-width: 24px;
+                background: {s['scrollbar_handle']};
+                border-radius: 5px; min-width: 24px;
             }}
-            QScrollBar::handle:horizontal:hover {{ background: #9aa0a6; }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {s['scrollbar_handle_hover']};
+            }}
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
             """
         )
+
+    def style(self) -> dict:
+        """Return a copy of the current style dictionary."""
+        return dict(self._style)
+
+    def set_style(self, style: dict) -> None:
+        """Merge ``style`` into the current style dict and re-apply it."""
+        self._style.update(style)
+        self._apply_style()
+        self.viewport().update()
+
+    def texts(self) -> dict:
+        """Return a copy of the current text dictionary."""
+        return dict(self._texts)
+
+    def set_texts(self, texts: dict) -> None:
+        """Merge ``texts`` into the current text dict and refresh the UI."""
+        self._texts.update(texts)
+        self._header._texts = self._texts
+        self._header.viewport().update()
+
+    def metrics(self) -> dict:
+        """Return a copy of the current metrics dictionary."""
+        return dict(self._metrics)
+
+    def set_metrics(self, metrics: dict) -> None:
+        """Merge ``metrics`` into the current metrics dict and re-apply."""
+        self._metrics.update({k: int(v) for k, v in metrics.items()})
+        self.verticalHeader().setDefaultSectionSize(self._metrics["row_height"])
+        self._apply_style()
+        self._header.updateGeometry()
+        self.viewport().update()
 
     # ------------------------------------------------------------------
     # model wiring

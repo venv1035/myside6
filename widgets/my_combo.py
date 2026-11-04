@@ -53,10 +53,10 @@ class _CheckListWidget(QListWidget):
 
 
 # --------------------------------------------------------------------------
-# Default theme for :class:`MyCombo`. Pass a dict to ``__init__``
-# (or :py:meth:`MyCombo.set_theme`) to override any subset.
+# Default style for :class:`MyCombo`. Pass a dict to ``__init__``
+# (or :py:meth:`MyCombo.set_style`) to override any subset.
 # --------------------------------------------------------------------------
-DEFAULT_THEME: dict[str, object] = {
+DEFAULT_STYLE: dict[str, object] = {
     # -- main line edit / outer frame -------------------------------------
     "background":             "#ffffff",
     "text_color":             "#202124",
@@ -112,21 +112,21 @@ DEFAULT_THEME: dict[str, object] = {
 
 
 # --------------------------------------------------------------------------
-# Preset themes -- aliases of :data:`DEFAULT_THEME` plus a few overrides.
-# Import them and pass to ``MyCombo(theme=...)`` or
-# ``combo.set_theme(...)``.  Every preset is a *complete* dict, so once you
+# Preset styles -- aliases of :data:`DEFAULT_STYLE` plus a few overrides.
+# Import them and pass to ``MyCombo(style=...)`` or
+# ``combo.set_style(...)``.  Every preset is a *complete* dict, so once you
 # import a preset you may freely tweak a single key without losing any
-# other value.  See :data:`THEMES` for a ``name -> dict`` aggregator.
+# other value.  See :data:`STYLES` for a ``name -> dict`` aggregator.
 # --------------------------------------------------------------------------
 
-# Google Material -- same as DEFAULT_THEME, kept for symmetry.
-GOOGLE_THEME: dict[str, object] = {**DEFAULT_THEME}
+# Google Material -- same as DEFAULT_STYLE, kept for symmetry.
+GOOGLE_STYLE: dict[str, object] = {**DEFAULT_STYLE}
 
 # 腾讯蓝 (Tencent blue) -- squarer corners, larger font, blue accent
 # evoking 腾讯文档 / TDesign.
 
-TENCENT_THEME: dict[str, object] = {
-    **DEFAULT_THEME,
+TENCENT_STYLE: dict[str, object] = {
+    **DEFAULT_STYLE,
     "text_color":             "#1f2329",
     "border_color":           "#dcdee2",
     "border_color_focus":     "#3370ff",   # 腾讯蓝
@@ -163,8 +163,8 @@ TENCENT_THEME: dict[str, object] = {
 
 # GitHub Primer -- neutral grey chrome, blue focus ring, green primary
 # button matching the GitHub "merge" / "commit" CTA.
-GITHUB_THEME: dict[str, object] = {
-    **DEFAULT_THEME,
+GITHUB_STYLE: dict[str, object] = {
+    **DEFAULT_STYLE,
     "text_color":             "#24292f",
     "border_color":           "#d0d7de",
     "border_color_focus":     "#0969da",
@@ -198,13 +198,13 @@ GITHUB_THEME: dict[str, object] = {
     "search_border_radius":   6,
 }
 
-# Aggregator: ``"name" -> theme dict``.  Use as
-# ``combo.set_theme(THEMES["github"])``.
-THEMES: dict[str, dict] = {
-    "default": DEFAULT_THEME,
-    "google":  GOOGLE_THEME,
-    "tencent": TENCENT_THEME,
-    "github":  GITHUB_THEME,
+# Aggregator: ``"name" -> style dict``.  Use as
+# ``combo.set_style(STYLES["github"])``.
+STYLES: dict[str, dict] = {
+    "default": DEFAULT_STYLE,
+    "google":  GOOGLE_STYLE,
+    "tencent": TENCENT_STYLE,
+    "github":  GITHUB_STYLE,
 }
 
 
@@ -260,7 +260,7 @@ class _MultiSelectPopup(QFrame):
     filterOnlyThis = Signal(object)  # emit single value: "filter to only this item"
 
     def __init__(self, parent: QWidget | None = None,
-                 theme: dict | None = None,
+                 style: dict | None = None,
                  texts: dict | None = None,
                  search_in_popup: bool = True,
                  columns: int = 1,
@@ -271,7 +271,7 @@ class _MultiSelectPopup(QFrame):
                  popup_chrome: int = 44) -> None:
         super().__init__(None)
         self._owner = parent
-        self._theme: dict = dict(theme) if theme else dict(DEFAULT_THEME)
+        self._style: dict = dict(style) if style else dict(DEFAULT_STYLE)
         self._texts: dict = dict(DEFAULT_TEXTS)
         if texts:
             self._texts.update(texts)
@@ -297,7 +297,7 @@ class _MultiSelectPopup(QFrame):
         self._set_columns(self._columns)
 
     def _apply_style(self) -> None:
-        t = self._theme
+        t = self._style
         self.setStyleSheet(f"""
             QFrame#MultiSelectPopup {{
                 background: {t['popup_background']};
@@ -363,11 +363,27 @@ class _MultiSelectPopup(QFrame):
         if hasattr(self, "_list"):
             self._apply_column_layout()
 
+    def apply_texts(self, texts: dict) -> None:
+        """Merge *texts* and refresh every visible label in the panel."""
+        self._texts.update(texts)
+        t = self._texts
+        self._sort_asc_btn.setText(str(t["sort_asc"]))
+        self._sort_desc_btn.setText(str(t["sort_desc"]))
+        self._select_all_cb.setText(str(t["select_all"]))
+        self._invert_btn.setText(str(t["invert"]))
+        self._clear_btn.setText(str(t["reset"]))
+        self._cancel_btn.setText(str(t["cancel"]))
+        self._ok_btn.setText(str(t["ok"]))
+        self._search_edit.setPlaceholderText(str(t["search_placeholder"]))
+        self._hover_only_btn.setText(str(t["hover_only"]))
+        self._hover_only_btn.setToolTip(str(t["hover_only_tip"]))
+        self._update_count()
+
     def _build_widgets(self) -> None:
         """Build the popup's child widget tree. Called once from __init__.
 
         Kept separate from :py:meth:`_apply_style` so that re-applying the
-        stylesheet at runtime (via :py:meth:`MyCombo.set_theme`) does NOT
+        stylesheet at runtime (via :py:meth:`MyCombo.set_style`) does NOT
         recreate the QVBoxLayout -- which would otherwise trigger
         Qt's "QLayout: Attempting to add QLayout to widget that already
         has a layout" warning.
@@ -526,8 +542,8 @@ class _MultiSelectPopup(QFrame):
     # Sizing the items themselves guarantees the full label is drawn, no
     # matter how long it is.
     def _item_padding(self) -> tuple[int, int]:
-        """Return ``(horizontal, vertical)`` padding from the theme."""
-        raw = str(self._theme.get("list_item_padding", "5px 6px")) \
+        """Return ``(horizontal, vertical)`` padding from the style."""
+        raw = str(self._style.get("list_item_padding", "5px 6px")) \
             .replace("px", " ").replace(",", " ")
         vals: list[int] = []
         for part in raw.split():
@@ -912,12 +928,13 @@ class MyCombo(QWidget):
 
     def __init__(self, parent: QWidget | None = None,
                  placeholder: str | None = None,
-                 theme: dict | None = None,
+                 style: dict | None = None,
                  search_in_popup: bool = True,
                  string_only: bool = False,
                  columns: int = 2,
                  max_col_chars: int = 20,
                  texts: dict | None = None,
+                 metrics: dict | None = None,
                  min_height: int | None = None,
                  min_width: int | None = None,
                  arrow_width: int | None = None,
@@ -933,10 +950,14 @@ class MyCombo(QWidget):
         ----------
         placeholder : str, optional
             Empty-state text.  Overrides ``texts["placeholder"]``.
-        theme : dict, optional
-            Any subset of :data:`DEFAULT_THEME`.
+        style : dict, optional
+            Any subset of :data:`DEFAULT_STYLE`.
         texts : dict, optional
             Any subset of :data:`DEFAULT_TEXTS` -- every visible string.
+        metrics : dict, optional
+            Any subset of :data:`DEFAULT_METRICS` -- closed-combo and
+            drop-down geometry.  The individual geometry keywords below
+            override this dict.
         min_height / min_width / arrow_width : int, optional
             Geometry of the closed combo box.
         popup_min_width / popup_min_height : int, optional
@@ -963,6 +984,7 @@ class MyCombo(QWidget):
             self._texts["separator"] = separator
         self._metrics: dict[str, int] = {
             **DEFAULT_METRICS,
+            **{k: int(v) for k, v in (metrics or {}).items()},
             **{k: int(v) for k, v in {
                 "min_height": min_height,
                 "min_width": min_width,
@@ -981,13 +1003,13 @@ class MyCombo(QWidget):
         self._selected_values: list = []
         self._popup_open = False
         self._editing = False    # True while user is typing a search query
-        self._theme: dict = dict(DEFAULT_THEME)
+        self._style: dict = dict(DEFAULT_STYLE)
         self._search_in_popup = search_in_popup
         self._string_only = string_only
         self._columns = max(1, int(columns))
         self._max_col_chars = max(0, int(max_col_chars))   # 0 = unlimited
-        if theme:
-            self._theme.update(theme)
+        if style:
+            self._style.update(style)
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumHeight(self._metrics["min_height"])
@@ -1020,7 +1042,7 @@ class MyCombo(QWidget):
         # ---- popup --------------------------------------------------------
         self._popup = _MultiSelectPopup(
             self,
-            theme=self._theme,
+            style=self._style,
             texts=self._texts,
             search_in_popup=search_in_popup,
             columns=self._columns,
@@ -1050,9 +1072,9 @@ class MyCombo(QWidget):
         """Expose the underlying QLineEdit (e.g. for validators)."""
         return self._edit
 
-    def theme(self) -> dict:
-        """Return a copy of the current theme dict."""
-        return dict(self._theme)
+    def style(self) -> dict:
+        """Return a copy of the current style dict."""
+        return dict(self._style)
 
     def texts(self) -> dict:
         """Return a copy of the current text dictionary."""
@@ -1062,9 +1084,33 @@ class MyCombo(QWidget):
         """Return a copy of the current metrics dictionary."""
         return dict(self._metrics)
 
+    def set_texts(self, texts: dict) -> None:
+        """Merge ``texts`` into the current text dict and refresh the UI."""
+        self._texts.update(texts)
+        self._placeholder = str(self._texts["placeholder"])
+        self._edit.setPlaceholderText(self._placeholder)
+        self._popup.apply_texts(self._texts)
+        self._render_selection_to_edit()
+
+    def set_metrics(self, metrics: dict) -> None:
+        """Merge ``metrics`` into the current metrics dict and re-apply."""
+        self._metrics.update({k: int(v) for k, v in metrics.items()})
+        m = self._metrics
+        self.setMinimumHeight(m["min_height"])
+        self._arrow.setFixedWidth(m["arrow_width"])
+        self._popup._list_min_height = m["list_min_height"]
+        self._popup._list_max_height = m["list_max_height"]
+        self._popup._item_min_height = m["item_min_height"]
+        self._popup._chrome = m["popup_chrome"]
+        self._popup._list.setMinimumHeight(m["list_min_height"])
+        self._popup._list.setMaximumHeight(m["list_max_height"])
+        self._popup._set_columns(self._columns)
+        self.updateGeometry()
+        self._reposition_popup()
+
     def _apply_style(self) -> None:
-        """(Re)emit the stylesheet from the current theme dictionary."""
-        t = self._theme
+        """(Re)emit the stylesheet from the current style dictionary."""
+        t = self._style
         self.setStyleSheet(f"""
             MyCombo {{
                 background: {t['background']};
@@ -1183,17 +1229,16 @@ class MyCombo(QWidget):
             self._editing = False
             self._render_selection_to_edit()
 
-    def set_theme(self, theme: dict) -> None:
-        """Merge ``theme`` into the current theme dict and re-apply styles.
+    def set_style(self, style: dict) -> None:
+        """Merge ``style`` into the current style dict and re-apply it.
 
-        Pass any subset of the keys in :data:`DEFAULT_THEME`; values not
-        present in ``theme`` keep their previous setting. Useful both at
-        construction time and for runtime theme switching.
+        Pass any subset of the keys in :data:`DEFAULT_STYLE`; values not
+        present in ``style`` keep their previous setting.
         """
-        self._theme.update(theme)
+        self._style.update(style)
         self._apply_style()
         # Re-apply popup styles so its buttons / list / frame match.
-        self._popup._theme = dict(self._theme)
+        self._popup._style = dict(self._style)
         self._popup._apply_style()   # re-measures item cells too
 
     def set_items(self, items: Iterable) -> None:
